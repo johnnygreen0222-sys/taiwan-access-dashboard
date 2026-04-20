@@ -605,10 +605,21 @@ function renderEDM({edm_utm:eu,mailchimp:mc},c){
     const card=el('div','card'); card.style.flex='1';
     card.appendChild(cardTitle('📧 EDM 成效','LINE + Email UTM'));
     const grid=el('div','kpi-grid');
-    [{label:'LINE 點擊',val:fmtN(eu.line?.clicks)},{label:'LINE 訂單',val:fmtN(eu.line?.orders)},
-     {label:'Email 點擊',val:fmtN(eu.email?.clicks)},{label:'Email 訂單',val:fmtN(eu.email?.orders)}]
+    const lt=eu.line_total||{}, et=eu.email_total||{};
+    [{label:'LINE 工作階段',val:fmtN(lt.sessions)},{label:'LINE 訂單',val:fmtN(lt.orders)},
+     {label:'LINE 營收',val:fmt(lt.revenue)},
+     {label:'Email 工作階段',val:fmtN(et.sessions)},{label:'Email 訂單',val:fmtN(et.orders)},
+     {label:'Email 營收',val:fmt(et.revenue)}]
      .forEach(({label,val})=>grid.appendChild(kpiCard(label,val,null,'GA4 UTM')));
-    card.appendChild(grid); row.appendChild(card);
+    card.appendChild(grid);
+    if(eu.channels?.length){
+      card.appendChild(txt('div','src-label','各渠道明細'));
+      const w=el('div','tbl-wrap');
+      w.appendChild(buildTable(['來源','媒介','工作階段','訂單','營收'],
+        eu.channels.slice(0,10).map(ch=>[ch.source,ch.medium,fmtN(ch.sessions),fmtN(ch.orders),fmt(ch.revenue)])));
+      card.appendChild(w);
+    }
+    row.appendChild(card);
   }
   if(mc&&!mc.error&&mc.campaigns?.length){
     const card2=el('div','card'); card2.style.flex='1';
@@ -629,25 +640,44 @@ function renderEDM({edm_utm:eu,mailchimp:mc},c){
 function renderProducts({ecommerce:ec,product_funnel:pf},c){
   if(ec?.error&&pf?.error) return;
   const section=el('div','section'); const row=el('div','row');
-  if(ec&&!ec.error&&ec.products?.length){
+
+  // 整體購買漏斗（來自 ecommerce.funnel）
+  if(ec&&!ec.error&&ec.funnel?.sessions){
+    const f=ec.funnel;
     const card=el('div','card'); card.style.flex='1';
-    card.appendChild(cardTitle('🛒 熱賣商品 Top 10','GA4'));
+    card.appendChild(cardTitle('🔽 購買行為漏斗','GA4'));
+    const funnel=el('div','funnel');
+    const steps=[
+      {label:'瀏覽',val:f.sessions},
+      {label:'加購',val:f.add_cart},
+      {label:'結帳',val:f.checkout},
+      {label:'完成',val:f.purchase},
+    ];
+    const max=steps[0].val||1;
+    const colors=['#6366f1','#8b5cf6','#a855f7','#c084fc'];
+    steps.forEach((step,i)=>{
+      const prev=i>0?steps[i-1].val:null;
+      funnel.appendChild(funnelRow(step.label,step.val,max,colors[i],prev?step.val/prev:null));
+    });
+    card.appendChild(funnel); row.appendChild(card);
+  }
+
+  // 熱賣商品 + 各商品加購轉換率
+  if(pf&&!pf.error&&pf.products?.length){
+    const card2=el('div','card'); card2.style.flex='2';
+    card2.appendChild(cardTitle('🛒 商品加購→購買轉換','GA4'));
+    const w=el('div','tbl-wrap');
+    w.appendChild(buildTable(['商品','加購','購買','加購轉換率','營收'],
+      pf.products.slice(0,10).map(p=>[p.name,fmtN(p.add_carts),fmtN(p.purchases),(p.cart_to_buy??0).toFixed(1)+'%',fmt(p.revenue)])));
+    card2.appendChild(w); row.appendChild(card2);
+  } else if(ec&&!ec.error&&ec.products?.length){
+    const card2=el('div','card'); card2.style.flex='2';
+    card2.appendChild(cardTitle('🛒 熱賣商品 Top 10','GA4'));
     const w=el('div','tbl-wrap');
     w.appendChild(buildTable(['商品','營收','銷量'],ec.products.slice(0,10).map(p=>[p.name,fmt(p.revenue),p.qty])));
-    card.appendChild(w); row.appendChild(card);
+    card2.appendChild(w); row.appendChild(card2);
   }
-  if(pf&&!pf.error&&pf.steps?.length){
-    const card2=el('div','card'); card2.style.flex='1';
-    card2.appendChild(cardTitle('🔽 商品瀏覽→購買漏斗','GA4'));
-    const funnel=el('div','funnel');
-    const max=pf.steps[0]?.value||1;
-    const colors=['#6366f1','#8b5cf6','#a855f7','#c084fc'];
-    pf.steps.forEach((step,i)=>{
-      const prev=i>0?pf.steps[i-1].value:null;
-      funnel.appendChild(funnelRow(step.label,step.value,max,colors[i]||colors[3],prev?step.value/prev:null));
-    });
-    card2.appendChild(funnel); row.appendChild(card2);
-  }
+
   if(row.children.length){ section.appendChild(row); c.appendChild(section); }
 }
 
