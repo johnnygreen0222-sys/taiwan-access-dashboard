@@ -136,6 +136,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
   </header>
   <main id="mainContent">
     <div id="sec-kpi"></div>
+    <div id="sec-adspend"></div>
     <div id="sec-yoy"></div>
     <div id="sec-ga4"></div>
     <div id="sec-meta"></div>
@@ -282,8 +283,9 @@ function skeletonCard(){
 //  Section definitions
 // ══════════════════════════════════════════════════════
 const SECTIONS=[
-  {id:'sec-kpi',   deps:['ecommerce','meta','gsc'],          fn:renderKPI},
-  {id:'sec-yoy',   deps:['yoy','cc1'],                        fn:renderYoY},
+  {id:'sec-kpi',      deps:['ecommerce','meta','gsc'],        fn:renderKPI},
+  {id:'sec-adspend',  deps:['meta','google_ads'],             fn:renderAdSpend},
+  {id:'sec-yoy',      deps:['yoy','cc1'],                     fn:renderYoY},
   {id:'sec-ga4',   deps:['ecommerce','ga4_extras'],           fn:renderGA4},
   {id:'sec-meta',  deps:['meta','meta_daily'],                fn:renderMeta},
   {id:'sec-gads',  deps:['google_ads'],                       fn:renderGAds},
@@ -389,6 +391,63 @@ function renderKPI({ecommerce:ec,meta:mt,gsc},c){
                 kpiCard('搜尋曝光',fmtN(gkpi.total_impressions),null,'GSC'));
   } else grid.appendChild(errKpi('GSC',gsc?.error||'載入中...'));
   section.appendChild(grid); c.appendChild(section);
+}
+
+function renderAdSpend({meta:mt, google_ads:ga},c){
+  const mkpi=mt?.meta_kpi||mt?.kpi||{};
+  const gs=ga?.summary||{};
+  const metaOk=mt&&!mt.error;
+  const gaOk=ga&&!ga.error;
+  if(!metaOk&&!gaOk) return;
+
+  const section=el('div','section');
+  const card=el('div','card');
+  card.appendChild(cardTitle('💰 廣告花費總覽','Meta + Google Ads'));
+
+  const grid=el('div','kpi-grid');
+
+  // Meta
+  if(metaOk){
+    grid.append(
+      kpiCard('Meta 花費',fmt(mkpi.spend),null,'Meta Ads（實際）'),
+      kpiCard('Meta ROAS',(mkpi.roas??0).toFixed(2)+'x',null,'Meta Ads'),
+      kpiCard('Meta 廣告營收',fmt(mkpi.revenue),null,'Meta Ads'),
+    );
+  } else {
+    grid.appendChild(errKpi('Meta 花費', mt?.error||'載入中...'));
+  }
+
+  // Google Ads
+  if(gaOk){
+    const gadSpendCard=el('div','kpi');
+    gadSpendCard.appendChild(txt('div','kpi-label','Google Ads 花費'));
+    const v=txt('div','kpi-val','—'); v.style.color='var(--muted)';
+    gadSpendCard.appendChild(v);
+    gadSpendCard.appendChild(txt('div','ga4-note','待接 Basic Access API'));
+    gadSpendCard.appendChild(txt('div','kpi-src',''));
+    grid.append(
+      gadSpendCard,
+      kpiCard('Google Ads 營收（估算）',fmt(gs.revenue),null,'GA4 估算'),
+      kpiCard('Google Ads 訂單（估算）',fmtN(gs.orders),null,'GA4 估算'),
+    );
+  } else {
+    grid.appendChild(errKpi('Google Ads', ga?.error||'載入中...'));
+  }
+
+  // 合計花費（目前只有 Meta 實際數字）
+  if(metaOk&&mkpi.spend){
+    const totalCard=el('div','kpi');
+    totalCard.style.cssText='border:1px solid var(--accent);background:rgba(99,102,241,.06)';
+    totalCard.appendChild(txt('div','kpi-label','合計廣告花費'));
+    totalCard.appendChild(txt('div','kpi-val',fmt(mkpi.spend)));
+    const note=txt('div','kpi-src','Meta 實際 + Google Ads 待補');
+    totalCard.appendChild(note);
+    grid.appendChild(totalCard);
+  }
+
+  card.appendChild(grid);
+  section.appendChild(card);
+  c.appendChild(section);
 }
 
 function renderYoY({yoy,cc1},c){
