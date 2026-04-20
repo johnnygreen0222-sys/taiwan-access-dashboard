@@ -913,19 +913,28 @@ GADS_CUSTOMER_ID = os.environ.get('GOOGLE_ADS_CUSTOMER_ID', '7245588980')
 
 
 def _get_gads_client():
-    """讀取 Google Ads 憑證（優先環境變數，fallback 本機 YAML）"""
-    import yaml
+    """讀取 Google Ads 憑證（優先個別環境變數，fallback 本機 YAML）"""
     from google.ads.googleads.client import GoogleAdsClient
 
-    yaml_env = os.environ.get('GOOGLE_ADS_YAML')
-    if yaml_env:
-        cfg = yaml.safe_load(yaml_env)
+    # 雲端：各欄位分開設定為環境變數
+    dev_token = os.environ.get('GOOGLE_ADS_DEVELOPER_TOKEN')
+    if dev_token:
+        cfg = {
+            'developer_token':  dev_token,
+            'client_id':        os.environ.get('GOOGLE_ADS_CLIENT_ID', ''),
+            'client_secret':    os.environ.get('GOOGLE_ADS_CLIENT_SECRET', ''),
+            'refresh_token':    os.environ.get('GOOGLE_ADS_REFRESH_TOKEN', ''),
+            'login_customer_id': GADS_CUSTOMER_ID,
+            'use_proto_plus':   True,
+        }
     else:
+        # 本機：讀 YAML 檔
+        import yaml
         yaml_path = os.path.expanduser('~/.claude/google-ads.yaml')
         with open(yaml_path) as f:
             cfg = yaml.safe_load(f)
+        cfg.setdefault('login_customer_id', GADS_CUSTOMER_ID)
 
-    cfg.setdefault('login_customer_id', GADS_CUSTOMER_ID)
     return GoogleAdsClient.load_from_dict(cfg, version='v18')
 
 

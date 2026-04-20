@@ -25,7 +25,13 @@ services:
         sync: false
       - key: GDRIVE_CLIENT_JSON
         sync: false
-      - key: GOOGLE_ADS_YAML
+      - key: GOOGLE_ADS_DEVELOPER_TOKEN
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_ID
+        sync: false
+      - key: GOOGLE_ADS_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_ADS_REFRESH_TOKEN
         sync: false
       - key: GOOGLE_ADS_CUSTOMER_ID
         value: "7245588980"
