@@ -411,12 +411,11 @@ function renderYoY({yoy,cc1},c){
       });
     card.appendChild(grid); row.appendChild(card);
   }
-  if(cc1&&!cc1.error){
+  if(cc1&&!cc1.error&&cc1.targets){
     const card=el('div','card'); card.style.flex='1';
     card.appendChild(cardTitle('🎸 CC1 銷售進度','Yamaha CC1'));
-    [{label:'5月目標（首批20台）',sold:cc1.may_sold??0,target:20},
-     {label:'Q2 目標（80台）',   sold:cc1.q2_sold??0, target:80},
-     {label:'年度目標（120台）', sold:cc1.total_sold??0,target:120}].forEach(g=>{
+    [{label:'Q2 目標（'+cc1.targets.q2+'台）', sold:cc1.q2?.qty??0,  target:cc1.targets.q2??80},
+     {label:'年度目標（'+cc1.targets.year+'台）',sold:cc1.year?.qty??0,target:cc1.targets.year??120}].forEach(g=>{
       const gb=el('div','goal-block');
       const hdr=el('div',''); hdr.style.cssText='display:flex;justify-content:space-between;font-size:.82rem;margin-bottom:4px';
       hdr.appendChild(txt('span','',g.label));
@@ -428,7 +427,8 @@ function renderYoY({yoy,cc1},c){
       pb.style.cssText='width:'+pct+'%;background:'+(pct>=80?'var(--green)':pct>=50?'var(--accent)':'var(--yellow)');
       pb.appendChild(txt('span','',pct+'%')); pw.appendChild(pb); gb.appendChild(pw); card.appendChild(gb);
     });
-    if(cc1.last_order) card.appendChild(txt('div','kpi-src','最近訂單：'+cc1.last_order));
+    const p2=cc1.period||{};
+    card.appendChild(txt('div','kpi-src','Q2 統計期間：'+(p2.q2_start||'')+'～'+(p2.q2_end||'')));
     row.appendChild(card);
   }
   if(row.children.length) c.appendChild(row);
