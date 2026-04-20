@@ -906,111 +906,104 @@ def fetch_keyword_gaps(days=90):
 
 
 # ══════════════════════════════════════════
-#  Google Ads（透過 GA4，等 Basic Access 批准後換成真正 API）
+#  Google Ads API（Basic Access 已核准）
 # ══════════════════════════════════════════
 
-def fetch_google_ads_via_ga4(days=30):
-    """
-    從 GA4 拉出 Google Ads / PMAX 廣告成效。
-    等 Google Ads Basic Access 批准後，此函式可替換成真正的 Google Ads API。
-    """
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
-    prev_end   = (datetime.today() - timedelta(days=days+1)).strftime('%Y-%m-%d')
-    prev_start = (datetime.today() - timedelta(days=days*2)).strftime('%Y-%m-%d')
+GADS_CUSTOMER_ID = os.environ.get('GOOGLE_ADS_CUSTOMER_ID', '7245588980')
 
-    def v(row, i, typ=float):
-        try: return typ(row['metricValues'][i]['value'])
-        except: return typ(0)
 
-    # ── 各廣告活動成效（本期 vs 上期）
-    camp_raw = _ga4_report({
-        'dateRanges': [
-            {'startDate': start,      'endDate': end,      'name': 'current'},
-            {'startDate': prev_start, 'endDate': prev_end, 'name': 'previous'},
-        ],
-        'dimensions': [{'name': 'sessionCampaignName'}],
-        'metrics': [
-            {'name': 'sessions'},
-            {'name': 'purchaseRevenue'},
-            {'name': 'transactions'},
-            {'name': 'bounceRate'},
-        ],
-        'dimensionFilter': {
-            'filter': {
-                'fieldName': 'sessionDefaultChannelGrouping',
-                'inListFilter': {'values': ['Paid Search', 'Display', 'Paid Video', 'Demand Gen']},
-            }
-        },
-        'orderBys': [{'metric': {'metricName': 'sessions'}, 'desc': True}],
-        'limit': 10,
-    })
+def _get_gads_client():
+    """讀取 Google Ads 憑證（優先環境變數，fallback 本機 YAML）"""
+    import yaml
+    from google.ads.googleads.client import GoogleAdsClient
 
-    campaigns = []
-    for row in camp_raw.get('rows', []):
-        name = row['dimensionValues'][0]['value']
-        if name in ('(not set)', '(direct)'):
-            continue
-        cur_row = row['metricValues'][:4]
-        # 上期數據在 dateRanges index 1 的 rows
-        sess_c  = v(row, 0); rev_c = v(row, 1); txn_c = v(row, 2)
-        campaigns.append({
-            'name':     name,
-            'sessions': int(sess_c),
-            'revenue':  round(rev_c),
-            'orders':   int(txn_c),
-            'cvr':      round(txn_c / sess_c * 100, 2) if sess_c else 0,
-        })
+    yaml_env = os.environ.get('GOOGLE_ADS_YAML')
+    if yaml_env:
+        cfg = yaml.safe_load(yaml_env)
+    else:
+        yaml_path = os.path.expanduser('~/.claude/google-ads.yaml')
+        with open(yaml_path) as f:
+            cfg = yaml.safe_load(f)
 
-    # ── 每日廣告帶來的工作階段趨勢
-    daily_raw = _ga4_report({
-        'dateRanges': [{'startDate': start, 'endDate': end}],
-        'dimensions': [{'name': 'date'}],
-        'metrics': [{'name': 'sessions'}, {'name': 'purchaseRevenue'}],
-        'dimensionFilter': {
-            'filter': {
-                'fieldName': 'sessionDefaultChannelGrouping',
-                'inListFilter': {'values': ['Paid Search', 'Display', 'Paid Video', 'Demand Gen']},
-            }
-        },
-        'orderBys': [{'dimension': {'dimensionName': 'date'}}],
-    })
-    daily = [{'date': r['dimensionValues'][0]['value'],
-              'sessions': int(v(r, 0)),
-              'revenue':  round(v(r, 1))}
-             for r in daily_raw.get('rows', [])]
+    cfg.setdefault('login_customer_id', GADS_CUSTOMER_ID)
+    return GoogleAdsClient.load_from_dict(cfg, version='v18')
 
-    # ── 廣告管道彙總
-    channel_raw = _ga4_report({
-        'dateRanges': [
-            {'startDate': start,      'endDate': end,      'name': 'current'},
-            {'startDate': prev_start, 'endDate': prev_end, 'name': 'previous'},
-        ],
-        'dimensions': [{'name': 'sessionDefaultChannelGrouping'}],
-        'metrics': [{'name': 'sessions'}, {'name': 'purchaseRevenue'}, {'name': 'transactions'}],
-        'dimensionFilter': {
-            'filter': {
-                'fieldName': 'sessionDefaultChannelGrouping',
-                'inListFilter': {'values': ['Paid Search', 'Display', 'Paid Video', 'Demand Gen']},
-            }
-        },
-        'orderBys': [{'metric': {'metricName': 'sessions'}, 'desc': True}],
-    })
 
-    total_sess = total_rev = total_txn = 0
-    channels = []
-    for row in channel_raw.get('rows', []):
-        s = int(v(row, 0)); r = round(v(row, 1)); t = int(v(row, 2))
-        total_sess += s; total_rev += r; total_txn += t
-        channels.append({'channel': row['dimensionValues'][0]['value'],
-                         'sessions': s, 'revenue': r, 'orders': t})
+def fetch_google_ads(days=30):
+    """Google Ads 廣告活動成效（真實花費 / ROAS）"""
+    from google.ads.googleads.errors import GoogleAdsException
 
-    return {
-        'period':     {'start': start, 'end': end, 'days': days},
-        'summary':    {'sessions': total_sess, 'revenue': total_rev, 'orders': total_txn,
-                       'cvr': round(total_txn / total_sess * 100, 2) if total_sess else 0},
-        'campaigns':  campaigns,
-        'channels':   channels,
-        'daily':      daily,
-        'note':       'via_ga4',   # 標記：Basic Access 批准後換成 Google Ads API
-    }
+    end_dt   = datetime.today() - timedelta(days=1)
+    start_dt = datetime.today() - timedelta(days=days)
+    end_str   = end_dt.strftime('%Y-%m-%d')
+    start_str = start_dt.strftime('%Y-%m-%d')
+
+    try:
+        client     = _get_gads_client()
+        ga_service = client.get_service('GoogleAdsService')
+
+        query = f"""
+            SELECT
+                campaign.name,
+                campaign.status,
+                metrics.impressions,
+                metrics.clicks,
+                metrics.cost_micros,
+                metrics.conversions,
+                metrics.conversions_value
+            FROM campaign
+            WHERE segments.date BETWEEN '{start_str}' AND '{end_str}'
+              AND metrics.impressions > 0
+            ORDER BY metrics.cost_micros DESC
+            LIMIT 20
+        """
+        request = client.get_type('SearchGoogleAdsRequest')
+        request.customer_id = GADS_CUSTOMER_ID
+        request.query = query
+
+        campaigns   = []
+        tot_spend   = tot_rev = tot_clicks = tot_orders = 0
+
+        for row in ga_service.search(request=request):
+            m     = row.metrics
+            spend = m.cost_micros / 1_000_000
+            rev   = m.conversions_value
+            clk   = int(m.clicks)
+            conv  = m.conversions
+            roas  = round(rev / spend, 2) if spend > 0 else 0.0
+            campaigns.append({
+                'name':        row.campaign.name,
+                'spend':       round(spend),
+                'clicks':      clk,
+                'impressions': int(m.impressions),
+                'revenue':     round(rev),
+                'orders':      round(conv),
+                'roas':        roas,
+            })
+            tot_spend  += spend
+            tot_rev    += rev
+            tot_clicks += clk
+            tot_orders += conv
+
+        campaigns.sort(key=lambda x: x['spend'], reverse=True)
+
+        return {
+            'period':    {'start': start_str, 'end': end_str, 'days': days},
+            'summary':   {
+                'spend':   round(tot_spend),
+                'revenue': round(tot_rev),
+                'orders':  round(tot_orders),
+                'clicks':  tot_clicks,
+                'roas':    round(tot_rev / tot_spend, 2) if tot_spend else 0.0,
+            },
+            'campaigns': campaigns,
+            'note':      'google_ads_api',
+        }
+
+    except GoogleAdsException as ex:
+        errors = '; '.join(e.message for e in ex.failure.errors)
+        raise RuntimeError(f'Google Ads API 錯誤：{errors}')
+
+
+# 保留舊名稱作為 server.py SECTION_MAP 的 alias
+fetch_google_ads_via_ga4 = fetch_google_ads

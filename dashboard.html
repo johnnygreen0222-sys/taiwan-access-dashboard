@@ -227,7 +227,12 @@ function errKpi(label,msg){
 function buildTable(headers,rows){
   const tbl=document.createElement('table');
   const hrow=tbl.createTHead().insertRow();
-  headers.forEach(h=>{ const th=document.createElement('th'); th.textContent=h; hrow.appendChild(th); });
+  headers.forEach((h,i)=>{
+    const th=document.createElement('th');
+    th.textContent=h;
+    if(i>0) th.style.textAlign='right';
+    hrow.appendChild(th);
+  });
   const tb=tbl.createTBody();
   rows.forEach(cells=>{
     const tr=tb.insertRow();
@@ -419,29 +424,27 @@ function renderAdSpend({meta:mt, google_ads:ga},c){
 
   // Google Ads
   if(gaOk){
-    const gadSpendCard=el('div','kpi');
-    gadSpendCard.appendChild(txt('div','kpi-label','Google Ads 花費'));
-    const v=txt('div','kpi-val','—'); v.style.color='var(--muted)';
-    gadSpendCard.appendChild(v);
-    gadSpendCard.appendChild(txt('div','ga4-note','待接 Basic Access API'));
-    gadSpendCard.appendChild(txt('div','kpi-src',''));
+    const hasSpend=gs.spend>0;
     grid.append(
-      gadSpendCard,
-      kpiCard('Google Ads 營收（估算）',fmt(gs.revenue),null,'GA4 估算'),
-      kpiCard('Google Ads 訂單（估算）',fmtN(gs.orders),null,'GA4 估算'),
+      kpiCard('Google Ads 花費', hasSpend?fmt(gs.spend):'—', null, hasSpend?'Google Ads API':'無花費資料'),
+      kpiCard('Google Ads 營收', fmt(gs.revenue), null, 'Google Ads'),
+      kpiCard('Google Ads ROAS', (gs.roas??0).toFixed(2)+'x', null, 'Google Ads'),
     );
   } else {
     grid.appendChild(errKpi('Google Ads', ga?.error||'載入中...'));
   }
 
-  // 合計花費（目前只有 Meta 實際數字）
-  if(metaOk&&mkpi.spend){
+  // 合計花費
+  const totalSpend=(metaOk?mkpi.spend||0:0)+(gaOk?gs.spend||0:0);
+  if(totalSpend>0){
     const totalCard=el('div','kpi');
     totalCard.style.cssText='border:1px solid var(--accent);background:rgba(99,102,241,.06)';
     totalCard.appendChild(txt('div','kpi-label','合計廣告花費'));
-    totalCard.appendChild(txt('div','kpi-val',fmt(mkpi.spend)));
-    const note=txt('div','kpi-src','Meta 實際 + Google Ads 待補');
-    totalCard.appendChild(note);
+    totalCard.appendChild(txt('div','kpi-val',fmt(totalSpend)));
+    const parts=[];
+    if(metaOk&&mkpi.spend) parts.push('Meta '+fmt(mkpi.spend));
+    if(gaOk&&gs.spend)     parts.push('GAds '+fmt(gs.spend));
+    totalCard.appendChild(txt('div','kpi-src',parts.join(' + ')));
     grid.appendChild(totalCard);
   }
 
@@ -500,15 +503,16 @@ function renderGA4({ecommerce:ec,ga4_extras:gx},c){
     const card=el('div','card'); card.style.flex='2';
     card.appendChild(cardTitle('📈 營收 & 訂單趨勢','GA4'));
     const cv=document.createElement('canvas'); cv.id='revChart'; card.appendChild(cv);
-    if(ec.sources?.length){
-      card.appendChild(txt('div','src-label','流量來源 × 訂單'));
-      const w=el('div','tbl-wrap');
-      const totRev=ec.kpi?.revenue?.value||1;
-      w.appendChild(buildTable(['渠道','營收','訂單','佔比'],
-        ec.sources.slice(0,6).map(s=>[s.channel,fmt(s.revenue),fmtN(s.orders),(s.revenue/totRev*100).toFixed(1)+'%'])));
-      card.appendChild(w);
-    }
     row.appendChild(card);
+  }
+  if(ec&&!ec.error&&ec.sources?.length){
+    const sc=el('div','card'); sc.style.cssText='flex:1;min-width:260px';
+    sc.appendChild(cardTitle('🌐 流量渠道營收分佈','GA4 sessionDefaultChannelGrouping'));
+    const totRev=ec.kpi?.revenue?.value||1;
+    const w=el('div','tbl-wrap');
+    w.appendChild(buildTable(['渠道','營收','訂單','佔比'],
+      ec.sources.slice(0,8).map(s=>[s.channel,fmt(s.revenue),fmtN(s.orders),(s.revenue/totRev*100).toFixed(1)+'%'])));
+    sc.appendChild(w); row.appendChild(sc);
   }
   if(gx&&!gx.error){
     const card2=el('div','card'); card2.style.flex='1';
@@ -599,13 +603,13 @@ function renderGAds({google_ads:ga},c){
   if(!ga||ga.error) return;
   const s=ga.summary||{};
   const section=el('div','section'); const card=el('div','card');
-  card.appendChild(cardTitle('🔍 Google Ads 成效（GA4 估算）',''));
-  card.appendChild(txt('div','ga4-note','⚠ 目前為 GA4 付費搜尋流量估算，Basic Access 核准後換真正廣告 API'));
+  const isRealApi=ga.note==='google_ads_api';
+  card.appendChild(cardTitle('🔍 Google Ads 廣告成效', isRealApi?'Google Ads API':''));
   const grid=el('div','kpi-grid');
-  grid.append(kpiCard('工作階段',fmtN(s.sessions),null,'GA4'),
-              kpiCard('訂單數',fmtN(s.orders),null,'GA4'),
-              kpiCard('帶來營收',fmt(s.revenue),null,'GA4'),
-              kpiCard('轉換率',(s.cvr??0).toFixed(2)+'%',null,'GA4'));
+  grid.append(kpiCard('廣告花費',   isRealApi?fmt(s.spend):'—',   null, isRealApi?'Google Ads':'—'),
+              kpiCard('帶來營收',   fmt(s.revenue),                null, isRealApi?'Google Ads':'GA4'),
+              kpiCard('整體 ROAS',  (s.roas??0).toFixed(2)+'x',   null, isRealApi?'Google Ads':'—'),
+              kpiCard('訂單數',     fmtN(s.orders),                null, isRealApi?'Google Ads':'GA4'));
   card.appendChild(grid);
   if(ga.channels?.length){
     card.appendChild(txt('div','src-label','渠道明細'));
@@ -617,8 +621,13 @@ function renderGAds({google_ads:ga},c){
   if(ga.campaigns?.length){
     card.appendChild(txt('div','src-label','廣告活動'));
     const w2=el('div','tbl-wrap');
-    w2.appendChild(buildTable(['活動','工作階段','訂單','轉換率','營收'],
-      ga.campaigns.filter(g=>g.sessions>0).slice(0,8).map(g=>[g.name,fmtN(g.sessions),fmtN(g.orders),(g.cvr??0).toFixed(2)+'%',fmt(g.revenue)])));
+    if(isRealApi){
+      w2.appendChild(buildTable(['活動','花費','ROAS','點擊','訂單','營收'],
+        ga.campaigns.filter(g=>g.spend>0).slice(0,8).map(g=>[g.name,fmt(g.spend),g.roas+'x',fmtN(g.clicks),fmtN(g.orders),fmt(g.revenue)])));
+    } else {
+      w2.appendChild(buildTable(['活動','工作階段','訂單','轉換率','營收'],
+        ga.campaigns.filter(g=>g.sessions>0).slice(0,8).map(g=>[g.name,fmtN(g.sessions),fmtN(g.orders),(g.cvr??0).toFixed(2)+'%',fmt(g.revenue)])));
+    }
     card.appendChild(w2);
   }
   section.appendChild(card); c.appendChild(section);
@@ -756,8 +765,10 @@ function renderProducts({ecommerce:ec,product_funnel:pf},c){
 function renderForecast({forecast:fc},c){
   if(!fc||fc.error) return;
   const section=el('div','section'); const card=el('div','card');
-  const trend=fc.trend||0;
-  const badge=txt('span','badge trend-badge '+(trend>10?'badge-g':trend>0?'badge-y':'badge-r'),(trend>0?'▲':'▼')+Math.abs(trend).toFixed(1)+'%');
+  const trendObj=fc.trend||{}; const trend=trendObj.slope_daily??trendObj??0;
+  const trendN=typeof trend==='object'?0:trend;
+  const badge=txt('span','badge trend-badge '+(trendN>100?'badge-g':trendN>0?'badge-y':'badge-r'),
+    (trendN>=0?'▲':'▼')+' '+(trendObj.direction||'平穩')+' MA14:'+fmt(trendObj.ma14||0,'$'));
   const titleRow=cardTitle('📊 收益預測（14天）','線性回歸 + MA14'); titleRow.appendChild(badge);
   card.appendChild(titleRow);
   const cv=document.createElement('canvas'); cv.id='forecastChart'; card.appendChild(cv);
