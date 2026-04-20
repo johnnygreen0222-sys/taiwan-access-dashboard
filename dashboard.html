@@ -159,12 +159,25 @@ function getToken(){ return sessionStorage.getItem('dash_token')||''; }
 
 document.getElementById('loginBtn').addEventListener('click', doLogin);
 document.getElementById('tokenInput').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
-function doLogin(){
+async function doLogin(){
   const t=document.getElementById('tokenInput').value.trim();
   if(!t) return;
-  sessionStorage.setItem('dash_token',t);
-  document.getElementById('loginError').style.display='none';
-  loadSections(_currentDays);
+  const btn=document.getElementById('loginBtn');
+  btn.disabled=true; btn.textContent='驗證中...';
+  try{
+    const res=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})});
+    const j=await res.json();
+    if(!j.ok){ document.getElementById('loginError').style.display='block'; return; }
+    sessionStorage.setItem('dash_token',t);
+    document.getElementById('loginError').style.display='none';
+    document.getElementById('loginGate').style.display='none';
+    document.getElementById('app').style.display='block';
+    loadSections(_currentDays);
+  }catch(e){
+    document.getElementById('loginError').style.display='block';
+  }finally{
+    btn.disabled=false; btn.textContent='登入';
+  }
 }
 function handleUnauth(){
   sessionStorage.removeItem('dash_token');
