@@ -393,19 +393,22 @@ function renderKPI({ecommerce:ec,meta:mt,gsc},c){
 
 function renderYoY({yoy,cc1},c){
   const row=el('div','row section');
-  if(yoy&&!yoy.error&&yoy.metrics){
+  if(yoy&&!yoy.error&&yoy.current){
+    const cur=yoy.current, prev=yoy.yoy, chg=yoy.changes||{};
+    const p=yoy.period||{};
     const card=el('div','card'); card.style.flex='1';
-    card.appendChild(cardTitle('📅 年同期比較（YoY）',yoy.period?.current||''));
+    card.appendChild(cardTitle('📅 年同期比較（YoY）',p.current_start+'～'+p.current_end));
     const grid=el('div','yoy-grid');
-    const labels={revenue:'營收',orders:'訂單',sessions:'工作階段'};
-    Object.entries(yoy.metrics).forEach(([k,v])=>{
-      const cell=el('div','yoy-cell');
-      cell.appendChild(txt('div','yoy-label',labels[k]||k));
-      const cur=txt('div','yoy-cur',k==='revenue'?fmt(v.current):fmtN(v.current));
-      cur.style.color=v.change>=0?'var(--green)':'var(--red)'; cell.appendChild(cur);
-      cell.appendChild(txt('div','yoy-prev','去年 '+(k==='revenue'?fmt(v.previous):fmtN(v.previous))+' ('+(v.change>=0?'▲':'▼')+Math.abs(v.change).toFixed(1)+'%)'));
-      grid.appendChild(cell);
-    });
+    [{k:'revenue',lbl:'營收',fmtFn:fmt},{k:'orders',lbl:'訂單',fmtFn:fmtN},{k:'sessions',lbl:'工作階段',fmtFn:fmtN}]
+      .forEach(({k,lbl,fmtFn})=>{
+        const c2=chg[k]??0;
+        const cell=el('div','yoy-cell');
+        cell.appendChild(txt('div','yoy-label',lbl));
+        const curTxt=txt('div','yoy-cur',fmtFn(cur[k]));
+        curTxt.style.color=c2>=0?'var(--green)':'var(--red)'; cell.appendChild(curTxt);
+        cell.appendChild(txt('div','yoy-prev','去年 '+fmtFn(prev[k])+' ('+(c2>=0?'▲':'▼')+Math.abs(c2).toFixed(1)+'%)'));
+        grid.appendChild(cell);
+      });
     card.appendChild(grid); row.appendChild(card);
   }
   if(cc1&&!cc1.error){
@@ -535,19 +538,29 @@ function renderMeta({meta:mt,meta_daily:md},c){
 
 function renderGAds({google_ads:ga},c){
   if(!ga||ga.error) return;
+  const s=ga.summary||{};
   const section=el('div','section'); const card=el('div','card');
-  card.appendChild(cardTitle('🔍 Google Ads 成效',''));
-  card.appendChild(txt('div','ga4-note','⚠ 目前為 GA4 流量來源估算，Basic Access 核准後換真正 API'));
+  card.appendChild(cardTitle('🔍 Google Ads 成效（GA4 估算）',''));
+  card.appendChild(txt('div','ga4-note','⚠ 目前為 GA4 付費搜尋流量估算，Basic Access 核准後換真正廣告 API'));
   const grid=el('div','kpi-grid');
-  grid.append(kpiCard('工作階段',fmtN(ga.sessions),null,'GA4 估算'),
-              kpiCard('轉換數',fmtN(ga.conversions),null,'GA4 估算'),
-              kpiCard('帶來營收',fmt(ga.revenue),null,'GA4 估算'));
+  grid.append(kpiCard('工作階段',fmtN(s.sessions),null,'GA4'),
+              kpiCard('訂單數',fmtN(s.orders),null,'GA4'),
+              kpiCard('帶來營收',fmt(s.revenue),null,'GA4'),
+              kpiCard('轉換率',(s.cvr??0).toFixed(2)+'%',null,'GA4'));
   card.appendChild(grid);
-  if(ga.campaigns?.length){
+  if(ga.channels?.length){
+    card.appendChild(txt('div','src-label','渠道明細'));
     const w=el('div','tbl-wrap');
-    w.appendChild(buildTable(['活動','工作階段','轉換','營收'],
-      ga.campaigns.slice(0,8).map(g=>[g.name,fmtN(g.sessions),fmtN(g.conversions),fmt(g.revenue)])));
+    w.appendChild(buildTable(['渠道','工作階段','訂單','營收'],
+      ga.channels.map(ch=>[ch.channel,fmtN(ch.sessions),fmtN(ch.orders),fmt(ch.revenue)])));
     card.appendChild(w);
+  }
+  if(ga.campaigns?.length){
+    card.appendChild(txt('div','src-label','廣告活動'));
+    const w2=el('div','tbl-wrap');
+    w2.appendChild(buildTable(['活動','工作階段','訂單','轉換率','營收'],
+      ga.campaigns.filter(g=>g.sessions>0).slice(0,8).map(g=>[g.name,fmtN(g.sessions),fmtN(g.orders),(g.cvr??0).toFixed(2)+'%',fmt(g.revenue)])));
+    card.appendChild(w2);
   }
   section.appendChild(card); c.appendChild(section);
 }
