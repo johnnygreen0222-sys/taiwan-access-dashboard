@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: taiwan-access-dashboard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    envVars:
+      - key: ACCESS_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_SA_JSON
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_AD_ACCOUNT_ID
+        sync: false
+      - key: GA4_PROPERTY_ID
+        value: "296390016"
+      - key: GSC_SITE_URL
+        value: "https://www.taiwanaccess.com.tw/"
+      - key: MAILCHIMP_API_KEY
+        sync: false
+      - key: GDRIVE_TOKEN_JSON
+        sync: false
+      - key: GDRIVE_CLIENT_JSON
+        sync: false
