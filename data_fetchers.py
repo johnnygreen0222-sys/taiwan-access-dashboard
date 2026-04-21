@@ -5,15 +5,24 @@
   雲端：讀環境變數 GOOGLE_SA_JSON / META_* / GSC_SITE_URL
 """
 
-import json, os, re, time, urllib.request, urllib.parse
+import json, os, re, time, threading, urllib.request, urllib.parse
 from datetime import datetime, timedelta, date as date_type
+
+# Thread-local storage：讓 batch/warm-up 執行緒也能傳遞自訂日期範圍
+_thread_local = threading.local()
 
 
 def _date_range(days, lag=0):
     """Returns (start_str, end_str).
     lag: extra days to shift back (e.g. GSC needs lag=3 for indexing delay).
-    If Flask request context has g.start_date / g.end_date, use those (lag ignored).
+    Priority: thread-local → Flask g → compute from days.
     """
+    # 1. thread-local（batch 請求 / 背景預熱用）
+    s = getattr(_thread_local, 'start_date', None)
+    e = getattr(_thread_local, 'end_date', None)
+    if s and e:
+        return s, e
+    # 2. Flask request context（單一 section 請求用）
     try:
         from flask import g
         s = getattr(g, 'start_date', None)
@@ -21,7 +30,8 @@ def _date_range(days, lag=0):
         if s and e:
             return s, e
     except RuntimeError:
-        pass  # no Flask context (e.g. local script call)
+        pass
+    # 3. 預設：從今天往回算
     end   = (datetime.today() - timedelta(days=1 + lag)).strftime('%Y-%m-%d')
     start = (datetime.today() - timedelta(days=days + lag)).strftime('%Y-%m-%d')
     return start, end

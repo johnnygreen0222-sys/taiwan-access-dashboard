@@ -372,25 +372,52 @@ function loadSections(days, start, end){
     while(c.firstChild) c.removeChild(c.firstChild);
     if(deps.length) c.appendChild(skeletonCard());
   });
-  updateLoadNote(0);
+  // Sections with no deps render immediately
   SECTIONS.filter(s=>!s.deps.length).forEach(({id,fn})=>{
     const c=document.getElementById(id);
     if(c){ c.dataset.done='1'; while(c.firstChild) c.removeChild(c.firstChild); fn({},c,days); }
   });
+
   const keys=[...new Set(SECTIONS.flatMap(s=>s.deps))];
-  keys.forEach(key=>fetchKey(key,days));
+  updateLoadNote(0, keys.length);
+
+  // ── 批次請求：一個 HTTP round trip 取得所有 section ──
+  let batchUrl='/api/sections/batch?sections='+keys.join(',')+'&days='+days;
+  if(_customStart&&_customEnd) batchUrl+='&start='+_customStart+'&end='+_customEnd;
+
+  fetch(batchUrl,{headers:{'X-Access-Token':getToken()}})
+    .then(r=>{ if(r.status===401){handleUnauth();return null;} return r.json(); })
+    .then(data=>{
+      if(!data) return;
+      // 依序更新 store，逐 section 渲染（讓快的先出現）
+      const ordered=['ecommerce','meta','gsc','ga4_extras','meta_daily','gsc_pages',
+                     'edm_utm','mailchimp','product_funnel','google_ads','yoy','cc1',
+                     'instagram','threads','google_ads_kw','forecast','keyword_gaps'];
+      const renderOne=i=>{
+        if(i>=ordered.length){ checkRender(days); return; }
+        const key=ordered[i];
+        if(key in data){ _store[key]=data[key]; checkRender(days); }
+        // 用 microtask 讓瀏覽器有機會繪製
+        Promise.resolve().then(()=>renderOne(i+1));
+      };
+      renderOne(0);
+      // 補上 batch 可能沒有的 key（安全網）
+      keys.forEach(k=>{ if(!(k in _store)) _store[k]={error:'未回傳'}; });
+      checkRender(days);
+    })
+    .catch(e=>{
+      // 批次失敗時降級為逐個請求
+      keys.forEach(key=>fetchKey(key,days));
+    });
 }
 
-function _sectionUrl(key, days){
-  let url='/api/section/'+key+'?days='+days;
-  if(_customStart&&_customEnd) url+='&start='+_customStart+'&end='+_customEnd;
-  return url;
-}
-
+// 單一 section 請求（retry / fallback 用）
 function fetchKey(key,days){
   if(_inFlight[key]) return;
   _inFlight[key]=true;
-  fetch(_sectionUrl(key,days),{headers:{'X-Access-Token':getToken()}})
+  let url='/api/section/'+key+'?days='+days;
+  if(_customStart&&_customEnd) url+='&start='+_customStart+'&end='+_customEnd;
+  fetch(url,{headers:{'X-Access-Token':getToken()}})
     .then(r=>{ if(r.status===401){handleUnauth();return null;} return r.json(); })
     .then(data=>{ if(data===null) return; _store[key]=data; delete _inFlight[key]; checkRender(days); })
     .catch(e=>{ _store[key]={error:e.message}; delete _inFlight[key]; checkRender(days); });

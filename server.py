@@ -10,8 +10,9 @@ Taiwan Access 行銷儀表板 server（獨立版）
 設定: config.json（或 Render 環境變數）
 """
 
-import json, os, time
+import json, os, time, threading
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, session, g
 
@@ -34,8 +35,30 @@ ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY') or CFG.get('anthropic_api_ke
 PORT          = int(CFG.get('port', 5200))
 
 # ── Per-section cache ─────────────────────────────────────
-_section_cache = {}   # {(section, cache_key): {'data': ..., 'ts': float}}
-CACHE_TTL      = 1800  # 30 分鐘
+_section_cache      = {}          # {cache_key: {'data': ..., 'ts': float}}
+_cache_lock         = threading.Lock()
+DEFAULT_TTL         = 1800        # 30 分鐘（預設）
+
+# 不同資料的更新頻率不同，給更長 TTL 減少重複抓取
+SECTION_TTL = {
+    'forecast':      4 * 3600,    # 4 小時：線性回歸預測日更
+    'keyword_gaps':  4 * 3600,    # 4 小時：GSC 機會詞
+    'yoy':           3 * 3600,    # 3 小時：年同期
+    'mailchimp':     3 * 3600,    # 3 小時：活動不常更新
+    'gsc':           2 * 3600,    # 2 小時：GSC 每日更新
+    'gsc_pages':     2 * 3600,
+    'instagram':     2 * 3600,
+    'threads':       2 * 3600,
+    'cc1':           2 * 3600,
+    'google_ads_kw': 2 * 3600,    # 2 小時：關鍵字層級
+}
+
+# 預熱時要跑的 section（排除慢速或不常用的）
+WARM_SECTIONS = [
+    'ecommerce', 'meta', 'gsc', 'meta_daily', 'ga4_extras',
+    'gsc_pages', 'edm_utm', 'mailchimp', 'product_funnel',
+    'google_ads', 'yoy', 'cc1',
+]
 
 # ── Section → fetcher mapping ─────────────────────────────
 # mode: 'days' = 直接傳 days；'long60/90' = max(N, days)；'fixed' = 無參數
@@ -58,6 +81,64 @@ SECTION_MAP = {
     'keyword_gaps':  ('fetch_keyword_gaps',         'long90'),
     'cc1':           ('fetch_cc1_progress',         'fixed'),
 }
+
+
+# ── Fetch helper (thread-safe, no Flask context needed) ───
+def _make_cache_key(name, effective, start=None, end=None):
+    return (name, start, end) if (start and end) else (name, effective)
+
+def _fetch_one(name, effective, start=None, end=None):
+    """執行一個 section 的資料抓取，透過 thread-local 傳遞日期範圍。"""
+    import data_fetchers
+    # 設定 thread-local 日期，讓 data_fetchers._date_range() 能讀到
+    data_fetchers._thread_local.start_date = start
+    data_fetchers._thread_local.end_date   = end
+    fn_name, mode = SECTION_MAP[name]
+    fn = getattr(data_fetchers, fn_name)
+    return fn() if mode == 'fixed' else fn(effective)
+
+def _get_cached(cache_key, name):
+    """回傳 cache 命中的資料，否則 None。"""
+    with _cache_lock:
+        entry = _section_cache.get(cache_key)
+    if not entry:
+        return None
+    ttl = SECTION_TTL.get(name, DEFAULT_TTL)
+    if time.time() - entry['ts'] < ttl:
+        return entry['data']
+    return None
+
+def _set_cached(cache_key, data):
+    with _cache_lock:
+        _section_cache[cache_key] = {'data': data, 'ts': time.time()}
+
+
+def _warm_cache_bg(days=30):
+    """啟動時在背景執行緒預熱 cache，讓第一個使用者不用等 API。"""
+    time.sleep(2)  # 等 server 完全啟動
+    now = time.time()
+    to_fetch = []
+    for name in WARM_SECTIONS:
+        _, mode = SECTION_MAP[name]
+        effective = max(60, days) if mode == 'long60' else max(90, days) if mode == 'long90' else days
+        ck = _make_cache_key(name, effective)
+        if _get_cached(ck, name) is None:
+            to_fetch.append((name, effective))
+
+    if not to_fetch:
+        return
+
+    print(f'[warm-up] 預熱 {len(to_fetch)} 個 section…')
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(_fetch_one, name, eff): (name, eff) for name, eff in to_fetch}
+        for future in as_completed(futures):
+            name, eff = futures[future]
+            try:
+                data = future.result(timeout=45)
+                _set_cached(_make_cache_key(name, eff), data)
+                print(f'[warm-up] ✓ {name}')
+            except Exception as e:
+                print(f'[warm-up] ✗ {name}: {e}')
 
 
 # ── Auth ──────────────────────────────────────────────────
@@ -100,49 +181,88 @@ def auth():
     return jsonify({'ok': True})
 
 
+def _resolve_effective(mode, days):
+    if   mode == 'long60': return max(60, days)
+    elif mode == 'long90': return max(90, days)
+    return days
+
+
 @app.route('/api/section/<name>')
 @require_token
 def section_data(name):
     if name not in SECTION_MAP:
         return jsonify({'error': f'未知 section：{name}'}), 404
 
-    days               = int(request.args.get('days', 30))
-    start_date         = request.args.get('start')   # e.g. '2025-03-01'
-    end_date           = request.args.get('end')     # e.g. '2025-03-31'
-    fn_name, mode      = SECTION_MAP[name]
+    days       = int(request.args.get('days', 30))
+    start_date = request.args.get('start')
+    end_date   = request.args.get('end')
+    _, mode    = SECTION_MAP[name]
+    effective  = _resolve_effective(mode, days)
+    cache_key  = _make_cache_key(name, effective, start_date, end_date)
 
-    if   mode == 'long60': effective = max(60, days)
-    elif mode == 'long90': effective = max(90, days)
-    else:                  effective = days
+    cached = _get_cached(cache_key, name)
+    if cached is not None:
+        return jsonify(cached)
 
-    # Inject custom date range into Flask request context
-    if start_date and end_date:
-        g.start_date = start_date
-        g.end_date   = end_date
-        cache_key = (name, start_date, end_date)
-    else:
-        g.start_date = None
-        g.end_date   = None
-        cache_key = (name, effective)
-
-    now = time.time()
-    if cache_key in _section_cache and now - _section_cache[cache_key]['ts'] < CACHE_TTL:
-        return jsonify(_section_cache[cache_key]['data'])
-
-    import data_fetchers
-    fn = getattr(data_fetchers, fn_name)
     try:
-        result = fn() if mode == 'fixed' else fn(effective)
-        _section_cache[cache_key] = {'data': result, 'ts': now}
+        result = _fetch_one(name, effective, start_date, end_date)
+        _set_cached(cache_key, result)
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)})
 
 
+@app.route('/api/sections/batch')
+@require_token
+def sections_batch():
+    """一次請求批次取得多個 section，伺服器端平行抓取。"""
+    names      = [n for n in request.args.get('sections', '').split(',') if n in SECTION_MAP]
+    days       = int(request.args.get('days', 30))
+    start_date = request.args.get('start')
+    end_date   = request.args.get('end')
+
+    if not names:
+        return jsonify({})
+
+    results   = {}
+    to_fetch  = []
+
+    for name in names:
+        _, mode   = SECTION_MAP[name]
+        effective = _resolve_effective(mode, days)
+        ck        = _make_cache_key(name, effective, start_date, end_date)
+        cached    = _get_cached(ck, name)
+        if cached is not None:
+            results[name] = cached
+        else:
+            to_fetch.append((name, effective, ck))
+
+    if to_fetch:
+        workers = min(8, len(to_fetch))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            future_map = {
+                ex.submit(_fetch_one, name, eff, start_date, end_date): (name, ck)
+                for name, eff, ck in to_fetch
+            }
+            for future in as_completed(future_map):
+                name, ck = future_map[future]
+                try:
+                    data = future.result(timeout=45)
+                    _set_cached(ck, data)
+                    results[name] = data
+                except Exception as e:
+                    results[name] = {'error': str(e)}
+
+    return jsonify(results)
+
+
 @app.route('/api/dashboard/refresh', methods=['POST'])
 @require_token
 def dashboard_refresh():
-    _section_cache.clear()
+    with _cache_lock:
+        _section_cache.clear()
+    # 清空後立即背景預熱
+    threading.Thread(target=_warm_cache_bg, daemon=True).start()
     return jsonify({'ok': True})
 
 
@@ -263,4 +383,9 @@ if __name__ == '__main__':
     print(f'   Token  ：{"✓ 已啟用" if ACCESS_TOKEN else "✗ 未設定"}')
     print(f'   Claude ：{"✓ 已設定" if ANTHROPIC_KEY else "⚠ 未設定（AI 建議不可用）"}')
     print(f'   本機   ：http://localhost:{port}')
+    # 啟動背景預熱
+    threading.Thread(target=_warm_cache_bg, daemon=True).start()
     app.run(host='0.0.0.0', port=port, debug=False)
+else:
+    # 被 gunicorn 載入時也預熱
+    threading.Thread(target=_warm_cache_bg, daemon=True).start()
