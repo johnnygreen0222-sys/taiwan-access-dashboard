@@ -981,6 +981,8 @@ function renderInsights(container, text){
 // ══════════════════════════════════════════════════════
 function buildReport(d){
   const ec=d.ecommerce||{},mt=d.meta||{},gsc=d.gsc||{};
+  const ga=d.google_ads||{},mc=d.mailchimp||{},eu=d.edm_utm||{};
+  const gp=d.gsc_pages||{},pf=d.product_funnel||{},fc=d.forecast||{};
   const days=d.days||30, kpi=ec.kpi||{}, mkpi=mt.meta_kpi||mt.kpi||{}, gkpi=gsc.kpi||{};
   const period=ec.period||mt.period||gsc.period||{};
   const N=n=>(n??0).toLocaleString();
@@ -992,6 +994,8 @@ function buildReport(d){
   L.push('  期間：'+(period.start??'')+'～'+(period.end??'')+'（近 '+days+' 天）');
   L.push('  產出：'+new Date().toLocaleString('zh-TW'));
   L.push('═'.repeat(56));
+
+  // ── GA4 電商績效
   if(!ec.error){
     L.push('');L.push('【GA4 電商績效】');
     L.push('  營收        '+M(kpi.revenue?.value??0).padStart(12)+'  '+chg(kpi.revenue?.change));
@@ -999,10 +1003,24 @@ function buildReport(d){
     L.push('  平均客單    '+M(kpi.aov?.value??0).padStart(12)+'  '+chg(kpi.aov?.change));
     L.push('  轉換率      '+((kpi.cvr??0).toFixed(2)+'%').padStart(12));
     if(ec.sources?.length){
-      L.push('');L.push('  ─ 流量來源');
-      ec.sources.forEach(s=>L.push('  '+String(s.channel).padEnd(22)+M(s.revenue).padStart(12)+'  '+N(s.orders)+' 筆'));
+      L.push('');L.push('  ─ 流量渠道營收');
+      ec.sources.slice(0,8).forEach(s=>L.push('  '+String(s.channel).padEnd(22)+M(s.revenue).padStart(12)+'  '+N(s.orders)+' 筆'));
+    }
+    if(ec.products?.length){
+      L.push('');L.push('  ─ 熱賣商品 Top 10');
+      ec.products.slice(0,10).forEach(p=>L.push('  '+String(p.name).slice(0,30).padEnd(32)+M(p.revenue).padStart(10)+'  '+N(p.qty)+' 件'));
     }
   }else L.push('\n【GA4】載入失敗：'+ec.error);
+
+  // ── 商品漏斗
+  if(!pf.error&&pf.products?.length){
+    L.push('');L.push('─'.repeat(56));
+    L.push('');L.push('【商品加購→購買轉換】');
+    pf.products.slice(0,8).forEach(p=>
+      L.push('  '+String(p.name).slice(0,28).padEnd(30)+'加購'+N(p.add_carts).padStart(6)+'  購買'+N(p.purchases).padStart(6)+'  轉換'+((p.cart_to_buy??0).toFixed(1)+'%').padStart(6)));
+  }
+
+  // ── Meta Ads
   L.push('');L.push('─'.repeat(56));
   if(!mt.error){
     L.push('');L.push('【Meta Ads】');
@@ -1014,6 +1032,33 @@ function buildReport(d){
       mt.campaigns.filter(x=>x.spend>0).forEach(x=>L.push('  '+String(x.name).slice(0,26).padEnd(28)+M(x.spend).padStart(10)+'  ROAS '+x.roas+'x'));
     }
   }else L.push('\n【Meta Ads】載入失敗：'+mt.error);
+
+  // ── Google Ads
+  L.push('');L.push('─'.repeat(56));
+  if(!ga.error){
+    const gs=ga.summary||{};
+    L.push('');L.push('【Google Ads】'+(ga.note==='google_ads_api'?' (真實 API)':' (GA4 估算)'));
+    if(ga.note==='google_ads_api'){
+      L.push('  廣告花費    '+M(gs.spend??0).padStart(12));
+      L.push('  帶來營收    '+M(gs.revenue??0).padStart(12));
+      L.push('  整體 ROAS   '+((gs.roas??0).toFixed(2)+'x').padStart(12));
+      L.push('  點擊數      '+N(gs.clicks??0).toString().padStart(12));
+    } else {
+      L.push('  帶來營收    '+M(gs.revenue??0).padStart(12));
+      L.push('  訂單數      '+N(gs.orders??0).toString().padStart(12));
+    }
+    if(ga.campaigns?.length){
+      L.push('');L.push('  ─ 廣告活動');
+      ga.campaigns.filter(g=>(g.spend||g.sessions)>0).slice(0,8).forEach(g=>{
+        if(ga.note==='google_ads_api')
+          L.push('  '+String(g.name).slice(0,26).padEnd(28)+M(g.spend).padStart(10)+'  ROAS '+g.roas+'x  點擊 '+N(g.clicks));
+        else
+          L.push('  '+String(g.name).slice(0,26).padEnd(28)+'訂單 '+N(g.orders).padStart(6)+'  '+M(g.revenue));
+      });
+    }
+  }else L.push('\n【Google Ads】載入失敗：'+ga.error);
+
+  // ── GSC 自然搜尋
   L.push('');L.push('─'.repeat(56));
   if(!gsc.error){
     L.push('');L.push('【GSC 自然搜尋】');
@@ -1021,8 +1066,58 @@ function buildReport(d){
     L.push('  曝光次數    '+N(gkpi.total_impressions??0).toString().padStart(12));
     L.push('  平均 CTR    '+((gkpi.avg_ctr??0).toFixed(1)+'%').padStart(12));
     const opps=(gsc.keywords||[]).filter(k=>k.position>=4&&k.position<=15&&k.impressions>100);
-    if(opps.length){ L.push('');L.push('  ─ SEO 機會關鍵字'); opps.forEach(k=>L.push('  「'+k.keyword+'」 排名 '+k.position+'，曝光 '+N(k.impressions)+'，CTR '+k.ctr+'%')); }
+    if(opps.length){
+      L.push('');L.push('  ─ SEO 機會關鍵字（排名 4–15）');
+      opps.slice(0,10).forEach(k=>L.push('  「'+k.keyword+'」 排名 '+k.position+'，曝光 '+N(k.impressions)+'，CTR '+k.ctr+'%'));
+    }
+    if(gsc.keywords?.length){
+      L.push('');L.push('  ─ 關鍵字 Top 20');
+      gsc.keywords.slice(0,20).forEach(k=>
+        L.push('  '+String(k.keyword).slice(0,28).padEnd(30)+'點擊'+N(k.clicks).padStart(6)+'  曝光'+N(k.impressions).padStart(8)+'  排名'+String(k.position).padStart(6)));
+    }
   }else L.push('\n【GSC】載入失敗：'+gsc.error);
+
+  // ── GSC 文章排名
+  if(!gp.error&&gp.pages?.length){
+    L.push('');L.push('  ─ 文章排名 Top 25');
+    gp.pages.slice(0,25).forEach(p=>
+      L.push('  '+String(p.slug).slice(0,32).padEnd(34)+'點擊'+N(p.clicks).padStart(6)+'  排名'+String(p.position).padStart(6)));
+  }
+
+  // ── EDM / LINE
+  L.push('');L.push('─'.repeat(56));
+  if(!eu.error){
+    const lt=eu.line_total||{},et=eu.email_total||{};
+    L.push('');L.push('【EDM 成效（GA4 UTM）】');
+    L.push('  LINE  工作階段 '+N(lt.sessions).padStart(8)+'  訂單 '+N(lt.orders).padStart(6)+'  營收 '+M(lt.revenue));
+    L.push('  Email 工作階段 '+N(et.sessions).padStart(8)+'  訂單 '+N(et.orders).padStart(6)+'  營收 '+M(et.revenue));
+    if(eu.channels?.length){
+      L.push('');L.push('  ─ 各渠道明細');
+      eu.channels.slice(0,10).forEach(ch=>
+        L.push('  '+String(ch.source+'/'+ch.medium).slice(0,24).padEnd(26)+'工作階段'+N(ch.sessions).padStart(6)+'  訂單'+N(ch.orders).padStart(5)+'  '+M(ch.revenue)));
+    }
+  }else if(eu.error) L.push('\n【EDM UTM】載入失敗：'+eu.error);
+
+  // ── Mailchimp
+  if(!mc.error&&mc.campaigns?.length){
+    const mkc=mc.kpi||{};
+    L.push('');L.push('【Mailchimp 報告】');
+    L.push('  平均開信率  '+((mkc.avg_open_rate??0).toFixed(1)+'%').padStart(12));
+    L.push('  平均點擊率  '+((mkc.avg_click_rate??0).toFixed(1)+'%').padStart(12));
+    L.push('  總發送數    '+N(mkc.total_sent??0).toString().padStart(12));
+    L.push('');L.push('  ─ 最近活動');
+    mc.campaigns.slice(0,6).forEach(m=>
+      L.push('  '+String(m.subject||m.title||'—').slice(0,30).padEnd(32)+'開信 '+(m.open_rate+'%').padStart(7)+'  點擊 '+(m.click_rate+'%').padStart(7)+'  發送 '+N(m.emails_sent)));
+  }
+
+  // ── 收益預測
+  if(!fc.error&&fc.forecast?.length){
+    L.push('');L.push('─'.repeat(56));
+    const trendObj=fc.trend||{};
+    L.push('');L.push('【14天收益預測】  趨勢：'+(trendObj.direction||'—')+'  MA14：'+M(trendObj.ma14||0));
+    fc.forecast.slice(0,14).forEach(f=>L.push('  '+f.date+'  '+M(f.forecast)));
+  }
+
   L.push('');L.push('═'.repeat(56));
   L.push('（可將此報告貼給 AI 進行深度分析）');
   return L.join('\n');
