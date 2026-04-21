@@ -938,63 +938,94 @@ def _get_gads_client():
     return GoogleAdsClient.load_from_dict(cfg, version='v20')
 
 
+def _gads_client_ids(client):
+    """列出 manager 帳號下所有可操作的子帳號 ID"""
+    ga_service = client.get_service('GoogleAdsService')
+    query = """
+        SELECT customer_client.client_customer, customer_client.level,
+               customer_client.manager, customer_client.status
+        FROM customer_client
+        WHERE customer_client.level <= 1
+          AND customer_client.status = 'ENABLED'
+    """
+    request = client.get_type('SearchGoogleAdsRequest')
+    request.customer_id = GADS_CUSTOMER_ID
+    request.query = query
+    ids = []
+    for row in ga_service.search(request=request):
+        cc = row.customer_client
+        if not cc.manager:
+            cid = str(cc.client_customer).replace('customers/', '')
+            ids.append(cid)
+    return ids or [GADS_CUSTOMER_ID]
+
+
 def fetch_google_ads(days=30):
     """Google Ads 廣告活動成效（真實花費 / ROAS）"""
     from google.ads.googleads.errors import GoogleAdsException
 
-    end_dt   = datetime.today() - timedelta(days=1)
-    start_dt = datetime.today() - timedelta(days=days)
-    end_str   = end_dt.strftime('%Y-%m-%d')
-    start_str = start_dt.strftime('%Y-%m-%d')
+    end_str   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
+    start_str = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+    query = f"""
+        SELECT
+            campaign.name,
+            metrics.impressions,
+            metrics.clicks,
+            metrics.cost_micros,
+            metrics.conversions,
+            metrics.conversions_value
+        FROM campaign
+        WHERE segments.date BETWEEN '{start_str}' AND '{end_str}'
+          AND metrics.impressions > 0
+        ORDER BY metrics.cost_micros DESC
+        LIMIT 20
+    """
 
     try:
         client     = _get_gads_client()
         ga_service = client.get_service('GoogleAdsService')
+        client_ids = _gads_client_ids(client)
 
-        query = f"""
-            SELECT
-                campaign.name,
-                campaign.status,
-                metrics.impressions,
-                metrics.clicks,
-                metrics.cost_micros,
-                metrics.conversions,
-                metrics.conversions_value
-            FROM campaign
-            WHERE segments.date BETWEEN '{start_str}' AND '{end_str}'
-              AND metrics.impressions > 0
-            ORDER BY metrics.cost_micros DESC
-            LIMIT 20
-        """
-        request = client.get_type('SearchGoogleAdsRequest')
-        request.customer_id = GADS_CUSTOMER_ID
-        request.query = query
+        camp_map   = {}
+        tot_spend  = tot_rev = tot_clicks = tot_orders = 0.0
 
-        campaigns   = []
-        tot_spend   = tot_rev = tot_clicks = tot_orders = 0
+        for cid in client_ids:
+            request = client.get_type('SearchGoogleAdsRequest')
+            request.customer_id = cid
+            request.query = query
+            try:
+                for row in ga_service.search(request=request):
+                    m     = row.metrics
+                    spend = m.cost_micros / 1_000_000
+                    rev   = m.conversions_value
+                    clk   = int(m.clicks)
+                    conv  = m.conversions
+                    name  = row.campaign.name
+                    if name in camp_map:
+                        camp_map[name]['spend']   += round(spend)
+                        camp_map[name]['revenue']  += round(rev)
+                        camp_map[name]['clicks']   += clk
+                        camp_map[name]['orders']   += round(conv)
+                    else:
+                        camp_map[name] = {
+                            'name':        name,
+                            'spend':       round(spend),
+                            'clicks':      clk,
+                            'impressions': int(m.impressions),
+                            'revenue':     round(rev),
+                            'orders':      round(conv),
+                        }
+                    tot_spend  += spend
+                    tot_rev    += rev
+                    tot_clicks += clk
+                    tot_orders += conv
+            except GoogleAdsException:
+                pass  # 跳過無法存取的子帳號
 
-        for row in ga_service.search(request=request):
-            m     = row.metrics
-            spend = m.cost_micros / 1_000_000
-            rev   = m.conversions_value
-            clk   = int(m.clicks)
-            conv  = m.conversions
-            roas  = round(rev / spend, 2) if spend > 0 else 0.0
-            campaigns.append({
-                'name':        row.campaign.name,
-                'spend':       round(spend),
-                'clicks':      clk,
-                'impressions': int(m.impressions),
-                'revenue':     round(rev),
-                'orders':      round(conv),
-                'roas':        roas,
-            })
-            tot_spend  += spend
-            tot_rev    += rev
-            tot_clicks += clk
-            tot_orders += conv
-
-        campaigns.sort(key=lambda x: x['spend'], reverse=True)
+        campaigns = sorted(camp_map.values(), key=lambda x: x['spend'], reverse=True)
+        for c in campaigns:
+            c['roas'] = round(c['revenue'] / c['spend'], 2) if c['spend'] else 0.0
 
         return {
             'period':    {'start': start_str, 'end': end_str, 'days': days},
@@ -1002,7 +1033,7 @@ def fetch_google_ads(days=30):
                 'spend':   round(tot_spend),
                 'revenue': round(tot_rev),
                 'orders':  round(tot_orders),
-                'clicks':  tot_clicks,
+                'clicks':  int(tot_clicks),
                 'roas':    round(tot_rev / tot_spend, 2) if tot_spend else 0.0,
             },
             'campaigns': campaigns,
