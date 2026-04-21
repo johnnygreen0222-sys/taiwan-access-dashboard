@@ -506,7 +506,7 @@ function renderGA4({ecommerce:ec,ga4_extras:gx},c){
     row.appendChild(card);
   }
   if(ec&&!ec.error&&ec.sources?.length){
-    const sc=el('div','card'); sc.style.cssText='flex:1;min-width:260px';
+    const sc=el('div','card'); sc.style.cssText='flex:2;min-width:360px';
     sc.appendChild(cardTitle('🌐 流量渠道營收分佈','GA4 sessionDefaultChannelGrouping'));
     const totRev=ec.kpi?.revenue?.value||1;
     const w=el('div','tbl-wrap');
@@ -713,7 +713,7 @@ function renderEDM({edm_utm:eu,mailchimp:mc},c){
     card2.appendChild(grid2);
     const w=el('div','tbl-wrap');
     w.appendChild(buildTable(['活動名稱','開信率','點擊率','發送數'],
-      mc.campaigns.slice(0,6).map(m=>[m.title||m.subject||'—',m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
+      mc.campaigns.slice(0,6).map(m=>[m.subject||m.title||'—',m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
     card2.appendChild(w); row.appendChild(card2);
   }
   if(row.children.length){ section.appendChild(row); c.appendChild(section); }
