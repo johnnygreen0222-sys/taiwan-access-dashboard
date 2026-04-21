@@ -935,7 +935,7 @@ def _get_gads_client():
             cfg = yaml.safe_load(f)
         cfg.setdefault('login_customer_id', GADS_CUSTOMER_ID)
 
-    return GoogleAdsClient.load_from_dict(cfg, version='v17')
+    return GoogleAdsClient.load_from_dict(cfg, version='v20')
 
 
 def fetch_google_ads(days=30):
