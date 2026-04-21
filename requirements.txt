@@ -3,5 +3,5 @@ gunicorn
 google-auth
 google-auth-httplib2
 google-api-python-client
-google-ads
+google-ads>=24.0.0
 pyyaml
