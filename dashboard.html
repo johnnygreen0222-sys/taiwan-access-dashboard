@@ -146,6 +146,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-prods"></div>
     <div id="sec-fc"></div>
     <div id="sec-ig"></div>
+    <div id="sec-threads"></div>
     <div id="sec-kwgap"></div>
     <div id="sec-alerts"></div>
     <div id="sec-ai"></div>
@@ -298,7 +299,8 @@ const SECTIONS=[
   {id:'sec-edm',   deps:['edm_utm','mailchimp'],              fn:renderEDM},
   {id:'sec-prods', deps:['ecommerce','product_funnel'],       fn:renderProducts},
   {id:'sec-fc',    deps:['forecast'],                         fn:renderForecast},
-  {id:'sec-ig',    deps:['instagram'],                        fn:renderIG},
+  {id:'sec-ig',      deps:['instagram'],                      fn:renderIG},
+  {id:'sec-threads', deps:['threads'],                        fn:renderThreads},
   {id:'sec-kwgap', deps:['keyword_gaps'],                     fn:renderKWGap},
   {id:'sec-alerts',deps:['ecommerce','meta','gsc'],           fn:renderAlerts},
   {id:'sec-ai',    deps:[],                                   fn:renderAI},
@@ -823,6 +825,54 @@ function renderIG({instagram:ig},c){
   });
 }
 
+function renderThreads({threads:th},c){
+  if(!th||th.error){
+    if(th?.error&&th.error.includes('THREADS_ACCESS_TOKEN')) return; // 靜默跳過未設定
+    return;
+  }
+  const section=el('div','section'); const row=el('div','row');
+
+  // 左：KPI 卡
+  const card=el('div','card'); card.style.flex='1';
+  card.appendChild(cardTitle('🧵 Threads 社群互動','@'+(th.account?.username||'')));
+  const grid=el('div','kpi-grid');
+  [
+    {label:'追蹤者',     val:fmtN(th.account?.followers||0)},
+    {label:'總瀏覽數',   val:fmtN(th.kpi?.views||0)},
+    {label:'按讚數',     val:fmtN(th.kpi?.likes||0)},
+    {label:'回覆數',     val:fmtN(th.kpi?.replies||0)},
+    {label:'轉發數',     val:fmtN(th.kpi?.reposts||0)},
+    {label:'總互動',     val:fmtN(th.kpi?.total_interactions||0)},
+  ].forEach(({label,val})=>{
+    const cell=el('div','kpi');
+    cell.appendChild(txt('div','kpi-label',label));
+    cell.appendChild(txt('div','kpi-val',val));
+    grid.appendChild(cell);
+  });
+  card.appendChild(grid); row.appendChild(card);
+
+  // 右：熱門貼文
+  if(th.posts?.length){
+    const card2=el('div','card'); card2.style.flex='2';
+    card2.appendChild(cardTitle('🔥 互動最高貼文',''));
+    const w=el('div','tbl-wrap');
+    w.appendChild(buildTable(
+      ['日期','貼文預覽','讚','回覆','轉發','瀏覽'],
+      th.posts.slice(0,8).map(p=>[
+        p.timestamp||'—',
+        (p.text||'（無文字）').slice(0,40)+(p.text?.length>40?'…':''),
+        fmtN(p.likes||0),
+        fmtN(p.replies||0),
+        fmtN(p.reposts||0),
+        fmtN(p.views||0),
+      ])
+    ));
+    card2.appendChild(w); row.appendChild(card2);
+  }
+
+  section.appendChild(row); c.appendChild(section);
+}
+
 function renderKWGap({keyword_gaps:kg},c){
   if(!kg||kg.error||(!kg.near_miss?.length&&!kg.ctr_gaps?.length)) return;
   const section=el('div','section'); const row=el('div','row');
@@ -981,7 +1031,7 @@ function renderInsights(container, text){
 // ══════════════════════════════════════════════════════
 function buildReport(d){
   const ec=d.ecommerce||{},mt=d.meta||{},gsc=d.gsc||{};
-  const ga=d.google_ads||{},mc=d.mailchimp||{},eu=d.edm_utm||{};
+  const ga=d.google_ads||{},mc=d.mailchimp||{},eu=d.edm_utm||{},th=d.threads||{};
   const gp=d.gsc_pages||{},pf=d.product_funnel||{},fc=d.forecast||{};
   const days=d.days||30, kpi=ec.kpi||{}, mkpi=mt.meta_kpi||mt.kpi||{}, gkpi=gsc.kpi||{};
   const period=ec.period||mt.period||gsc.period||{};
@@ -1108,6 +1158,23 @@ function buildReport(d){
     L.push('');L.push('  ─ 最近活動');
     mc.campaigns.slice(0,6).forEach(m=>
       L.push('  '+String(m.subject||m.title||'—').slice(0,30).padEnd(32)+'開信 '+(m.open_rate+'%').padStart(7)+'  點擊 '+(m.click_rate+'%').padStart(7)+'  發送 '+N(m.emails_sent)));
+  }
+
+  // ── Threads
+  if(!th.error&&th.kpi){
+    L.push('');L.push('─'.repeat(56));
+    L.push('');L.push('【Threads 社群互動】  @'+(th.account?.username||''));
+    L.push('  追蹤者      '+N(th.account?.followers||0).toString().padStart(12));
+    L.push('  總瀏覽數    '+N(th.kpi.views||0).toString().padStart(12));
+    L.push('  按讚數      '+N(th.kpi.likes||0).toString().padStart(12));
+    L.push('  回覆數      '+N(th.kpi.replies||0).toString().padStart(12));
+    L.push('  轉發數      '+N(th.kpi.reposts||0).toString().padStart(12));
+    L.push('  總互動      '+N(th.kpi.total_interactions||0).toString().padStart(12));
+    if(th.posts?.length){
+      L.push('');L.push('  ─ 熱門貼文 Top 5');
+      th.posts.slice(0,5).forEach(p=>
+        L.push('  '+String(p.text||'（無文字）').slice(0,34).padEnd(36)+'讚'+N(p.likes||0).padStart(5)+'  回'+N(p.replies||0).padStart(5)+'  轉'+N(p.reposts||0).padStart(5)));
+    }
   }
 
   // ── 收益預測

@@ -1047,3 +1047,116 @@ def fetch_google_ads(days=30):
 
 # 保留舊名稱作為 server.py SECTION_MAP 的 alias
 fetch_google_ads_via_ga4 = fetch_google_ads
+
+
+# ══════════════════════════════════════════
+#  Threads 社群互動數據
+# ══════════════════════════════════════════
+
+THREADS_BASE = 'https://graph.threads.net/v1.0'
+
+def fetch_threads_insights(days=30):
+    """Meta Threads 帳號洞察（追蹤者、觸及、互動、近期貼文）"""
+    token = os.environ.get('THREADS_ACCESS_TOKEN') or _load_config().get('threads_access_token', '')
+    if not token:
+        raise ValueError('未設定 THREADS_ACCESS_TOKEN，請先完成 Threads OAuth 授權')
+
+    def raw_get(path, params=None):
+        p = dict(params or {})
+        p['access_token'] = token
+        url = f'{THREADS_BASE}/{path}?{urllib.parse.urlencode(p)}'
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        if 'error' in data:
+            raise RuntimeError(data['error'].get('message', str(data['error'])))
+        return data
+
+    # 帳號基本資料
+    info = raw_get('me', {'fields': 'id,username,name,threads_biography'})
+    user_id = info.get('id', 'me')
+
+    since_ts = int((datetime.today() - timedelta(days=days)).timestamp())
+    until_ts = int(datetime.today().timestamp())
+
+    # 帳號層級洞察（期間內累計）
+    try:
+        insights_raw = raw_get(f'{user_id}/threads_insights', {
+            'metric': 'views,likes,replies,reposts,quotes',
+            'since':  since_ts,
+            'until':  until_ts,
+        })
+        kpi_map = {}
+        for m in insights_raw.get('data', []):
+            name = m.get('name', '')
+            # total_value 格式
+            tv = m.get('total_value', {})
+            if tv:
+                kpi_map[name] = tv.get('value', 0)
+            # values 陣列格式（day period）
+            elif m.get('values'):
+                kpi_map[name] = sum(v.get('value', 0) for v in m['values'])
+    except Exception as e:
+        kpi_map = {'_error': str(e)}
+
+    # 追蹤者數（lifetime only）
+    followers = 0
+    try:
+        fc_raw = raw_get(f'{user_id}/threads_insights', {'metric': 'followers_count'})
+        for m in fc_raw.get('data', []):
+            if m.get('name') == 'followers_count':
+                followers = m.get('total_value', {}).get('value', 0) or \
+                            (m.get('values') or [{}])[-1].get('value', 0)
+    except Exception:
+        pass
+
+    # 近期貼文列表
+    posts_raw = raw_get(f'{user_id}/threads', {
+        'fields': 'id,text,timestamp,media_type',
+        'since':  since_ts,
+        'until':  until_ts,
+        'limit':  20,
+    })
+    posts = []
+    for p in (posts_raw.get('data') or [])[:15]:
+        post = {
+            'id':        p.get('id', ''),
+            'text':      (p.get('text') or '')[:80],
+            'timestamp': (p.get('timestamp') or '')[:10],
+            'media_type': p.get('media_type', ''),
+        }
+        # 每篇貼文洞察
+        try:
+            pi = raw_get(f'{p["id"]}/insights', {'metric': 'views,likes,replies,reposts,quotes'})
+            for m in pi.get('data', []):
+                post[m['name']] = m.get('values', [{}])[0].get('value', 0)
+        except Exception:
+            pass
+        posts.append(post)
+
+    # 排序：互動最高的貼文在前
+    posts.sort(key=lambda p: (p.get('likes', 0) + p.get('replies', 0) + p.get('reposts', 0) + p.get('quotes', 0)), reverse=True)
+
+    total_interactions = (kpi_map.get('likes', 0) + kpi_map.get('replies', 0) +
+                          kpi_map.get('reposts', 0) + kpi_map.get('quotes', 0))
+
+    return {
+        'account': {
+            'username':  info.get('username', ''),
+            'name':      info.get('name', ''),
+            'followers': followers,
+        },
+        'kpi': {
+            'views':              kpi_map.get('views', 0),
+            'likes':              kpi_map.get('likes', 0),
+            'replies':            kpi_map.get('replies', 0),
+            'reposts':            kpi_map.get('reposts', 0),
+            'quotes':             kpi_map.get('quotes', 0),
+            'total_interactions': total_interactions,
+        },
+        'posts':  posts,
+        'period': {
+            'start': (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d'),
+            'end':   (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d'),
+        },
+    }

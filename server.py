@@ -51,6 +51,7 @@ SECTION_MAP = {
     'product_funnel':('fetch_ga4_product_funnel',   'days'),
     'yoy':           ('fetch_ga4_yoy',              'days'),
     'instagram':     ('fetch_instagram_insights',   'days'),
+    'threads':       ('fetch_threads_insights',     'days'),
     'google_ads':    ('fetch_google_ads_via_ga4',   'days'),
     'forecast':      ('fetch_revenue_forecast',     'long60'),
     'keyword_gaps':  ('fetch_keyword_gaps',         'long90'),
