@@ -107,6 +107,22 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .err-retry{margin-top:8px;padding:4px 12px;border-radius:6px;border:1px solid rgba(239,68,68,.3);background:transparent;color:var(--red);cursor:pointer;font-size:.8rem;display:block}
 .err-retry:hover{background:rgba(239,68,68,.08)}
 @media(max-width:768px){.kpi-grid{grid-template-columns:repeat(2,1fr)}.row{flex-direction:column}}
+/* ── Collapsible sections ── */
+.card.collapsed .card-body{display:none}
+.collapse-btn{background:none;border:none;color:var(--muted);cursor:pointer;font-size:.82rem;padding:2px 6px;border-radius:4px;line-height:1;flex-shrink:0}
+.collapse-btn:hover{color:var(--text);background:var(--border)}
+/* ── Custom date picker ── */
+.date-range-wrap{display:none;align-items:center;gap:6px;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:4px 10px}
+.date-range-wrap.active{display:flex}
+.date-range-wrap input[type=date]{background:transparent;border:none;color:var(--text);font-size:.82rem;cursor:pointer;outline:none}
+.date-range-wrap input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.6)}
+.date-range-wrap span{color:var(--muted);font-size:.8rem}
+.date-range-wrap button{padding:3px 10px;border-radius:4px;border:none;background:var(--accent);color:#fff;font-size:.8rem;cursor:pointer}
+/* ── Attribution note ── */
+.attr-note{font-size:.72rem;color:var(--yellow);background:rgba(234,179,8,.08);border:1px solid rgba(234,179,8,.15);border-radius:6px;padding:8px 12px;margin-top:10px;line-height:1.6}
+/* ── UTM coverage bar ── */
+.utm-bar-wrap{background:var(--border);border-radius:4px;height:20px;overflow:hidden;margin:8px 0}
+.utm-bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding:0 8px;font-size:.72rem;font-weight:700;color:#fff;transition:width .8s}
 </style>
 </head>
 <body>
@@ -127,6 +143,13 @@ tr:hover td{background:rgba(255,255,255,.02)}
         <button class="period-btn" data-days="7">7天</button>
         <button class="period-btn active" data-days="30">30天</button>
         <button class="period-btn" data-days="90">90天</button>
+        <button class="period-btn" id="customToggle" data-days="custom">自訂</button>
+      </div>
+      <div class="date-range-wrap" id="dateRangeWrap">
+        <input type="date" id="dateStart">
+        <span>→</span>
+        <input type="date" id="dateEnd">
+        <button id="applyDateBtn">套用</button>
       </div>
       <button class="btn" id="refreshBtn">🔄 重新整理</button>
       <button class="btn" id="exportBtn" style="background:var(--card2);border:1px solid var(--border);color:var(--text)">📋 匯出</button>
@@ -147,6 +170,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-fc"></div>
     <div id="sec-ig"></div>
     <div id="sec-threads"></div>
+    <div id="sec-gads-kw"></div>
     <div id="sec-kwgap"></div>
     <div id="sec-alerts"></div>
     <div id="sec-ai"></div>
@@ -200,10 +224,30 @@ function fmt(n,pre='$'){
   return pre+Math.round(n).toLocaleString();
 }
 function fmtN(n){ return (n??0).toLocaleString(); }
-function cardTitle(t,sub){
+function cardTitle(t,sub,collapsible){
   const d=el('div','card-title');
-  d.appendChild(txt('span','',t));
-  if(sub) d.appendChild(txt('span','sub',sub));
+  const left=el('span',''); left.style.display='flex'; left.style.alignItems='center'; left.style.gap='6px';
+  left.appendChild(txt('span','',t));
+  if(sub) left.appendChild(txt('span','sub',sub));
+  d.appendChild(left);
+  if(collapsible!==false){
+    const btn=el('button','collapse-btn'); btn.textContent='▾'; btn.title='收合';
+    btn.onclick=e=>{
+      e.stopPropagation();
+      const card=btn.closest('.card');
+      if(!card) return;
+      let body=card.querySelector('.card-body');
+      if(!body){ // wrap existing children
+        body=el('div','card-body');
+        while(card.children.length>1) body.appendChild(card.children[1]);
+        card.appendChild(body);
+      }
+      const collapsed=card.classList.toggle('collapsed');
+      btn.textContent=collapsed?'▸':'▾';
+      btn.title=collapsed?'展開':'收合';
+    };
+    d.appendChild(btn);
+  }
   return d;
 }
 function kpiCard(label,value,change,source){
@@ -301,6 +345,7 @@ const SECTIONS=[
   {id:'sec-fc',    deps:['forecast'],                         fn:renderForecast},
   {id:'sec-ig',      deps:['instagram'],                      fn:renderIG},
   {id:'sec-threads', deps:['threads'],                        fn:renderThreads},
+  {id:'sec-gads-kw', deps:['google_ads_kw'],                  fn:renderGAdsKW},
   {id:'sec-kwgap', deps:['keyword_gaps'],                     fn:renderKWGap},
   {id:'sec-alerts',deps:['ecommerce','meta','gsc'],           fn:renderAlerts},
   {id:'sec-ai',    deps:[],                                   fn:renderAI},
@@ -310,11 +355,14 @@ const SECTIONS=[
 //  Loading engine
 // ══════════════════════════════════════════════════════
 let _currentDays=30;
+let _customStart=null, _customEnd=null;   // custom date range
 const _store={};
 const _inFlight={};
 
-function loadSections(days){
+function loadSections(days, start, end){
   _currentDays=days;
+  _customStart=start||null;
+  _customEnd=end||null;
   Object.keys(_store).forEach(k=>delete _store[k]);
   Object.keys(_inFlight).forEach(k=>delete _inFlight[k]);
   SECTIONS.forEach(({id,deps})=>{
@@ -325,7 +373,6 @@ function loadSections(days){
     if(deps.length) c.appendChild(skeletonCard());
   });
   updateLoadNote(0);
-  // Sections with no deps render immediately
   SECTIONS.filter(s=>!s.deps.length).forEach(({id,fn})=>{
     const c=document.getElementById(id);
     if(c){ c.dataset.done='1'; while(c.firstChild) c.removeChild(c.firstChild); fn({},c,days); }
@@ -334,10 +381,16 @@ function loadSections(days){
   keys.forEach(key=>fetchKey(key,days));
 }
 
+function _sectionUrl(key, days){
+  let url='/api/section/'+key+'?days='+days;
+  if(_customStart&&_customEnd) url+='&start='+_customStart+'&end='+_customEnd;
+  return url;
+}
+
 function fetchKey(key,days){
   if(_inFlight[key]) return;
   _inFlight[key]=true;
-  fetch('/api/section/'+key+'?days='+days,{headers:{'X-Access-Token':getToken()}})
+  fetch(_sectionUrl(key,days),{headers:{'X-Access-Token':getToken()}})
     .then(r=>{ if(r.status===401){handleUnauth();return null;} return r.json(); })
     .then(data=>{ if(data===null) return; _store[key]=data; delete _inFlight[key]; checkRender(days); })
     .catch(e=>{ _store[key]={error:e.message}; delete _inFlight[key]; checkRender(days); });
@@ -451,6 +504,21 @@ function renderAdSpend({meta:mt, google_ads:ga},c){
   }
 
   card.appendChild(grid);
+
+  // 歸因一致性說明
+  if(metaOk&&ga?.note==='google_ads_api'){
+    const note=el('div','attr-note');
+    const metaRev=mkpi.revenue||0, gaRev=gs.revenue||0;
+    const diff=Math.abs(metaRev-gaRev);
+    const diffPct=gaRev>0?Math.round(diff/gaRev*100):0;
+    note.innerHTML=`<strong>⚠️ 歸因差異說明</strong><br>
+Meta Ads 廣告營收 <strong>${fmt(metaRev)}</strong> 採用「7天點擊 + 1天瀏覽」歸因視窗，
+Google Ads 轉換值 <strong>${fmt(gaRev)}</strong> 採用「最後點擊」歸因。
+兩者不應直接相加——同一筆訂單可能被兩邊同時計算。
+${diffPct>20?`<br>⚡ 目前兩平台營收差異達 <strong>${diffPct}%</strong>，建議在 GA4 以 last-click 歸因為主要基準。`:''}`;
+    card.appendChild(note);
+  }
+
   section.appendChild(card);
   c.appendChild(section);
 }
@@ -683,7 +751,10 @@ function renderGSC({gsc,gsc_pages:gp},c){
 
 function renderEDM({edm_utm:eu,mailchimp:mc},c){
   if(eu?.error&&mc?.error) return;
-  const section=el('div','section'); const row=el('div','row');
+  const section=el('div','section');
+
+  // ── Row 1：EDM 成效 + Mailchimp
+  const row=el('div','row');
   if(eu&&!eu.error){
     const card=el('div','card'); card.style.flex='1';
     card.appendChild(cardTitle('📧 EDM 成效','LINE + Email UTM'));
@@ -713,12 +784,69 @@ function renderEDM({edm_utm:eu,mailchimp:mc},c){
                  kpiCard('平均點擊率',(kpi.avg_click_rate??0).toFixed(1)+'%',null,'Mailchimp'),
                  kpiCard('總發送數',fmtN(kpi.total_sent),null,'Mailchimp'));
     card2.appendChild(grid2);
+    // 開信率趨勢折線圖
+    if(mc.campaigns.length>=2){
+      const cvId='mcTrendChart'+Date.now();
+      const cv=document.createElement('canvas'); cv.id=cvId;
+      cv.style.cssText='max-height:130px;margin:10px 0 6px';
+      card2.appendChild(cv);
+      requestAnimationFrame(()=>{
+        const sorted=[...mc.campaigns].sort((a,b)=>a.send_time.localeCompare(b.send_time));
+        new Chart(document.getElementById(cvId)?.getContext('2d'),{type:'bar',data:{
+          labels:sorted.map(m=>(m.send_time||'').slice(5)),
+          datasets:[
+            {label:'開信率%',data:sorted.map(m=>m.open_rate||0),backgroundColor:'rgba(99,102,241,.6)',borderRadius:3,yAxisID:'y'},
+            {label:'點擊率%',data:sorted.map(m=>m.click_rate||0),backgroundColor:'rgba(34,197,94,.6)',borderRadius:3,yAxisID:'y'},
+          ]},
+          options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8',font:{size:10}}}},
+            scales:{x:{ticks:{color:'#94a3b8',font:{size:10}},grid:{color:'#2a2d3e'}},
+                    y:{ticks:{color:'#94a3b8',font:{size:10},callback:v=>v+'%'},grid:{color:'#2a2d3e'}}}}});
+      });
+    }
     const w=el('div','tbl-wrap');
     w.appendChild(buildTable(['活動名稱','開信率','點擊率','發送數'],
-      mc.campaigns.slice(0,6).map(m=>[m.subject||m.title||'—',m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
+      mc.campaigns.slice(0,8).map(m=>[m.subject||m.title||'—',m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
     card2.appendChild(w); row.appendChild(card2);
   }
-  if(row.children.length){ section.appendChild(row); c.appendChild(section); }
+  if(row.children.length) section.appendChild(row);
+
+  // ── Row 2：UTM 完整性分析
+  const cov=eu?.utm_coverage;
+  if(cov&&!eu?.error){
+    const row2=el('div','row');
+    const utmCard=el('div','card'); utmCard.style.flex='1';
+    utmCard.appendChild(cardTitle('🔗 UTM 追蹤完整性','流量歸因覆蓋率'));
+    const rateColor=cov.utm_rate>=80?'var(--green)':cov.utm_rate>=60?'var(--yellow)':'var(--red)';
+    const barWrap=el('div','utm-bar-wrap');
+    const fill=el('div','utm-bar-fill');
+    fill.style.width=cov.utm_rate+'%'; fill.style.background=rateColor;
+    fill.textContent=cov.utm_rate+'% 已追蹤';
+    barWrap.appendChild(fill); utmCard.appendChild(barWrap);
+    const sg=el('div','kpi-grid');
+    [
+      {label:'總工作階段',val:fmtN(cov.total_sessions)},
+      {label:'已標記（UTM）',val:fmtN(cov.tagged_sessions)},
+      {label:'未標記',val:fmtN(cov.untagged_sessions)},
+      {label:'已追蹤營收',val:fmt(cov.tagged_revenue)},
+      {label:'未追蹤營收',val:fmt(cov.untagged_revenue)},
+    ].forEach(({label,val})=>{
+      const cell=el('div','kpi');
+      cell.appendChild(txt('div','kpi-label',label));
+      cell.appendChild(txt('div','kpi-val',val));
+      sg.appendChild(cell);
+    });
+    utmCard.appendChild(sg);
+    if(eu.untagged_sources?.length){
+      utmCard.appendChild(txt('div','src-label','未追蹤來源（建議加 UTM）'));
+      const w=el('div','tbl-wrap');
+      w.appendChild(buildTable(['來源/媒介','工作階段','營收'],
+        eu.untagged_sources.slice(0,8).map(u=>[u.source,fmtN(u.sessions),fmt(u.revenue)])));
+      utmCard.appendChild(w);
+    }
+    row2.appendChild(utmCard); section.appendChild(row2);
+  }
+
+  if(section.children.length) c.appendChild(section);
 }
 
 function renderProducts({ecommerce:ec,product_funnel:pf},c){
@@ -797,7 +925,8 @@ function renderForecast({forecast:fc},c){
 }
 
 function renderIG({instagram:ig},c){
-  const section=el('div','section'); const card=el('div','card');
+  const section=el('div','section'); const row=el('div','row');
+  const card=el('div','card'); card.style.flex='1';
   card.appendChild(cardTitle('📷 Instagram 成效','@'+(ig?.account?.username||'')));
   if(!ig||ig.error){
     card.appendChild(errBox(ig?.error||'資料載入失敗'));
@@ -805,15 +934,35 @@ function renderIG({instagram:ig},c){
   }
   const grid=el('div','kpi-grid');
   [{label:'追蹤者',val:fmtN(ig.account?.followers)},{label:'貼文總數',val:fmtN(ig.account?.media_count)},
-   {label:'觸及人數（累計）',val:fmtN(ig.kpi?.reach||0)},{label:'主頁瀏覽',val:fmtN(ig.kpi?.profile_views||0)},
+   {label:'觸及人數',val:fmtN(ig.kpi?.reach||0)},{label:'主頁瀏覽',val:fmtN(ig.kpi?.profile_views||0)},
    {label:'互動次數',val:fmtN(ig.kpi?.total_interactions||0)},{label:'參與帳號數',val:fmtN(ig.kpi?.accounts_engaged||0)}]
    .forEach(({label,val})=>{ const cell=el('div','kpi'); cell.appendChild(txt('div','kpi-label',label)); cell.appendChild(txt('div','kpi-val',val)); grid.appendChild(cell); });
   card.appendChild(grid);
   if(ig.daily?.length){
-    const cv=document.createElement('canvas'); cv.id='igChart'; cv.style.cssText='max-height:180px;margin-top:14px';
+    const cv=document.createElement('canvas'); cv.id='igChart'; cv.style.cssText='max-height:160px;margin-top:14px';
     card.appendChild(cv);
   }
-  section.appendChild(card); c.appendChild(section);
+  row.appendChild(card);
+
+  // 熱門貼文
+  if(ig.top_posts?.length){
+    const card2=el('div','card'); card2.style.flex='2';
+    card2.appendChild(cardTitle('🔥 熱門貼文 Top 12',''));
+    const w=el('div','tbl-wrap');
+    w.appendChild(buildTable(
+      ['日期','類型','內容預覽','讚','留言'],
+      ig.top_posts.slice(0,12).map(p=>[
+        p.timestamp||'—',
+        p.media_type==='VIDEO'?'🎬':p.media_type==='CAROUSEL_ALBUM'?'🖼️':'📷',
+        (p.caption||'（無說明）').slice(0,40)+(p.caption?.length>40?'…':''),
+        fmtN(p.likes||0),
+        fmtN(p.comments||0),
+      ])
+    ));
+    card2.appendChild(w); row.appendChild(card2);
+  }
+
+  section.appendChild(row); c.appendChild(section);
   requestAnimationFrame(()=>{
     if(!ig.daily?.length||!document.getElementById('igChart')) return;
     new Chart(document.getElementById('igChart').getContext('2d'),{type:'line',data:{
@@ -868,6 +1017,58 @@ function renderThreads({threads:th},c){
       ])
     ));
     card2.appendChild(w); row.appendChild(card2);
+  }
+
+  section.appendChild(row); c.appendChild(section);
+}
+
+function renderGAdsKW({google_ads_kw:kw},c){
+  if(!kw||kw.error||!kw.keywords?.length) return;
+  const section=el('div','section'); const row=el('div','row');
+
+  // 花費最高關鍵字
+  const card=el('div','card'); card.style.flex='2';
+  card.appendChild(cardTitle('🔑 Google Ads 關鍵字報告','花費 Top 50'));
+  const w=el('div','tbl-wrap');
+  w.appendChild(buildTable(
+    ['關鍵字','配對','廣告群組','花費','點擊','CTR%','轉換','CPA','ROAS'],
+    kw.keywords.slice(0,20).map(k=>[
+      k.keyword,
+      k.match_type==='EXACT'?'完全':k.match_type==='PHRASE'?'詞組':'廣泛',
+      (k.ad_group||'').slice(0,20),
+      fmt(k.spend),
+      fmtN(k.clicks),
+      k.ctr+'%',
+      k.conversions>0?k.conversions.toFixed(1):'—',
+      k.cpa>0?fmt(k.cpa):'—',
+      k.roas>0?k.roas+'x':'—',
+    ])
+  ));
+  card.appendChild(w); row.appendChild(card);
+
+  // 高 CPA 關鍵字警示
+  const highCpa=kw.keywords.filter(k=>k.cpa>0&&k.conversions>0).sort((a,b)=>b.cpa-a.cpa).slice(0,5);
+  const topRoas=kw.keywords.filter(k=>k.roas>0).sort((a,b)=>b.roas-a.roas).slice(0,5);
+  if(highCpa.length||topRoas.length){
+    const card2=el('div','card'); card2.style.flex='1';
+    card2.appendChild(cardTitle('🎯 效益分析',''));
+    if(highCpa.length){
+      card2.appendChild(txt('div','src-label','高 CPA 關鍵字（需優化）'));
+      highCpa.forEach(k=>{
+        const r=el('div','alert-item warn');
+        r.innerHTML=`<span class="alert-icon">⚠</span><div class="alert-text"><strong>${k.keyword}</strong><span>CPA: ${fmt(k.cpa)} | 花費: ${fmt(k.spend)} | 轉換: ${k.conversions.toFixed(1)}</span></div>`;
+        card2.appendChild(r);
+      });
+    }
+    if(topRoas.length){
+      card2.appendChild(txt('div','src-label','高 ROAS 關鍵字（可加碼）'));
+      topRoas.forEach(k=>{
+        const r=el('div','alert-item ok');
+        r.innerHTML=`<span class="alert-icon">🚀</span><div class="alert-text"><strong>${k.keyword}</strong><span>ROAS: ${k.roas}x | 花費: ${fmt(k.spend)} | 點擊: ${fmtN(k.clicks)}</span></div>`;
+        card2.appendChild(r);
+      });
+    }
+    row.appendChild(card2);
   }
 
   section.appendChild(row); c.appendChild(section);
@@ -931,12 +1132,36 @@ function renderAI({},c){
 // ══════════════════════════════════════════════════════
 //  Controls
 // ══════════════════════════════════════════════════════
+// ── Date picker init ──
+(function(){
+  const today=new Date(); const todayStr=today.toISOString().slice(0,10);
+  const d30=new Date(today); d30.setDate(d30.getDate()-30);
+  document.getElementById('dateStart').value=d30.toISOString().slice(0,10);
+  document.getElementById('dateEnd').value=todayStr;
+  document.getElementById('dateEnd').max=todayStr;
+})();
+
 document.querySelectorAll('.period-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
     document.querySelectorAll('.period-btn').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
-    loadSections(parseInt(btn.dataset.days));
+    const wrap=document.getElementById('dateRangeWrap');
+    if(btn.dataset.days==='custom'){
+      wrap.classList.add('active');
+    } else {
+      wrap.classList.remove('active');
+      _customStart=null; _customEnd=null;
+      loadSections(parseInt(btn.dataset.days));
+    }
   });
+});
+
+document.getElementById('applyDateBtn').addEventListener('click',()=>{
+  const s=document.getElementById('dateStart').value;
+  const e=document.getElementById('dateEnd').value;
+  if(!s||!e||s>e){ alert('請選擇有效的日期範圍（開始需早於結束）'); return; }
+  const days=Math.round((new Date(e)-new Date(s))/(1000*86400))+1;
+  loadSections(days, s, e);
 });
 
 document.getElementById('refreshBtn').addEventListener('click', async()=>{
@@ -1032,6 +1257,7 @@ function renderInsights(container, text){
 function buildReport(d){
   const ec=d.ecommerce||{},mt=d.meta||{},gsc=d.gsc||{};
   const ga=d.google_ads||{},mc=d.mailchimp||{},eu=d.edm_utm||{},th=d.threads||{};
+  const gakw=d.google_ads_kw||{};
   const gp=d.gsc_pages||{},pf=d.product_funnel||{},fc=d.forecast||{};
   const days=d.days||30, kpi=ec.kpi||{}, mkpi=mt.meta_kpi||mt.kpi||{}, gkpi=gsc.kpi||{};
   const period=ec.period||mt.period||gsc.period||{};
@@ -1158,6 +1384,29 @@ function buildReport(d){
     L.push('');L.push('  ─ 最近活動');
     mc.campaigns.slice(0,6).forEach(m=>
       L.push('  '+String(m.subject||m.title||'—').slice(0,30).padEnd(32)+'開信 '+(m.open_rate+'%').padStart(7)+'  點擊 '+(m.click_rate+'%').padStart(7)+'  發送 '+N(m.emails_sent)));
+  }
+
+  // ── Google Ads 關鍵字
+  if(!gakw.error&&gakw.keywords?.length){
+    L.push('');L.push('─'.repeat(56));
+    L.push('');L.push('【Google Ads 關鍵字 Top 15】');
+    gakw.keywords.slice(0,15).forEach(k=>
+      L.push('  '+String(k.keyword).slice(0,28).padEnd(30)+'花費'+fmt(k.spend).padStart(8)+'  點擊'+N(k.clicks).padStart(5)+'  CPA'+(k.cpa>0?fmt(k.cpa):'—').padStart(8)));
+  }
+
+  // ── UTM 完整性
+  const cov=eu.utm_coverage;
+  if(cov&&!eu.error){
+    L.push('');L.push('─'.repeat(56));
+    L.push('');L.push('【UTM 追蹤完整性】');
+    L.push('  追蹤覆蓋率    '+(cov.utm_rate+'%').padStart(10));
+    L.push('  已標記工作階段 '+N(cov.tagged_sessions).padStart(10));
+    L.push('  未標記工作階段 '+N(cov.untagged_sessions).padStart(10));
+    L.push('  未追蹤營收    '+M(cov.untagged_revenue).padStart(10));
+    if(eu.untagged_sources?.length){
+      L.push('');L.push('  ─ 主要未標記來源');
+      eu.untagged_sources.slice(0,5).forEach(u=>L.push('  '+String(u.source).slice(0,30).padEnd(32)+'工作階段'+N(u.sessions).padStart(6)));
+    }
   }
 
   // ── Threads

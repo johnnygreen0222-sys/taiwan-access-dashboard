@@ -6,7 +6,25 @@
 """
 
 import json, os, re, time, urllib.request, urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as date_type
+
+
+def _date_range(days, lag=0):
+    """Returns (start_str, end_str).
+    lag: extra days to shift back (e.g. GSC needs lag=3 for indexing delay).
+    If Flask request context has g.start_date / g.end_date, use those (lag ignored).
+    """
+    try:
+        from flask import g
+        s = getattr(g, 'start_date', None)
+        e = getattr(g, 'end_date', None)
+        if s and e:
+            return s, e
+    except RuntimeError:
+        pass  # no Flask context (e.g. local script call)
+    end   = (datetime.today() - timedelta(days=1 + lag)).strftime('%Y-%m-%d')
+    start = (datetime.today() - timedelta(days=days + lag)).strftime('%Y-%m-%d')
+    return start, end
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
@@ -48,10 +66,13 @@ def _ga4_report(body):
 
 def fetch_ga4_ecommerce(days=30):
     """回傳 GA4 電商整合數據"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
-    prev_end   = (datetime.today() - timedelta(days=days+1)).strftime('%Y-%m-%d')
-    prev_start = (datetime.today() - timedelta(days=days*2)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
+    # prev period = same number of days immediately before start
+    start_dt   = datetime.strptime(start, '%Y-%m-%d')
+    end_dt     = datetime.strptime(end,   '%Y-%m-%d')
+    period_len = (end_dt - start_dt).days + 1
+    prev_end   = (start_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+    prev_start = (start_dt - timedelta(days=period_len)).strftime('%Y-%m-%d')
 
     def v(row, i, typ=float):
         try: return typ(row['metricValues'][i]['value'])
@@ -141,8 +162,7 @@ def fetch_ga4_ecommerce(days=30):
 
 def fetch_ga4_extras(days=30):
     """裝置分析 + 新舊訪客"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
 
     def iv(row, i):
         try: return float(row['metricValues'][i]['value'])
@@ -214,8 +234,7 @@ def _act(key):
 
 
 def fetch_meta_ads(days=30):
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
     account = _act('META_AD_ACCOUNT_ID')
 
     fields = 'campaign_name,spend,impressions,clicks,ctr,cpc,actions,action_values'
@@ -262,8 +281,7 @@ def fetch_meta_ads(days=30):
 
 def fetch_meta_daily(days=30):
     """Meta Ads 每日花費 + 營收趨勢（帳號層級）"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
     account = _act('META_AD_ACCOUNT_ID')
 
     rows = _meta_get(f'{account}/insights', {
@@ -315,8 +333,7 @@ def _gsc_creds():
 def fetch_gsc_keywords(days=30):
     from googleapiclient.discovery import build
     svc   = build('searchconsole', 'v1', credentials=_gsc_creds())
-    end   = (datetime.today() - timedelta(days=3)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days+3)).strftime('%Y-%m-%d')
+    start, end = _date_range(days, lag=3)
 
     resp = svc.searchanalytics().query(
         siteUrl=GSC_SITE,
@@ -356,8 +373,7 @@ def fetch_gsc_pages(days=30):
     """回傳各頁面的自然流量排名（按點擊數排序，Top 25）"""
     from googleapiclient.discovery import build
     svc   = build('searchconsole', 'v1', credentials=_gsc_creds())
-    end   = (datetime.today() - timedelta(days=3)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days+3)).strftime('%Y-%m-%d')
+    start, end = _date_range(days, lag=3)
 
     # ── 頁面總覽（點擊 / 曝光 / 排名）
     resp = svc.searchanalytics().query(
@@ -419,8 +435,7 @@ def fetch_gsc_pages(days=30):
 
 def fetch_edm_utm(days=30):
     """從 GA4 抓 LINE / Email / EDM 各 UTM source 的流量成效"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
 
     def iv(row, i):
         try: return float(row['metricValues'][i]['value'])
@@ -484,11 +499,76 @@ def fetch_edm_utm(days=30):
     line_total  = group(['line'])
     email_total = group(['email','mailchimp','edm','newsletter'])
 
+    # ── UTM 完整性分析：全部流量 vs 已標記流量
+    all_raw = _ga4_report({
+        'dateRanges': [{'startDate': start, 'endDate': end}],
+        'dimensions': [
+            {'name': 'sessionSource'},
+            {'name': 'sessionMedium'},
+        ],
+        'metrics': [
+            {'name': 'sessions'},
+            {'name': 'purchaseRevenue'},
+            {'name': 'transactions'},
+        ],
+        'limit': 500,
+    })
+    def iv2(row, i):
+        try: return float(row['metricValues'][i]['value'])
+        except: return 0.0
+
+    TAGGED_MEDIUMS = {'cpc','paidsocial','paid social','email','edm','newsletter',
+                      'social','line','sms','affiliate','referral','display'}
+    ORGANIC_SOURCES = {'google','bing','yahoo','naver','duckduckgo','ecosia'}
+    total_sess = total_rev = total_txn = 0
+    tagged_sess = tagged_rev = tagged_txn = 0
+    untagged_by_src = {}
+    for r in all_raw.get('rows', []):
+        src = r['dimensionValues'][0]['value'].lower()
+        med = r['dimensionValues'][1]['value'].lower()
+        s   = int(iv2(r, 0))
+        rv  = round(iv2(r, 1))
+        tx  = int(iv2(r, 2))
+        total_sess += s; total_rev += rv; total_txn += tx
+        is_paid_med = med in TAGGED_MEDIUMS
+        is_organic  = src in ORGANIC_SOURCES and med in ('organic', '(none)')
+        is_direct   = src == '(direct)' and med == '(none)'
+        if is_paid_med or is_organic:
+            tagged_sess += s; tagged_rev += rv; tagged_txn += tx
+        elif is_direct:
+            untagged_by_src['直接流量'] = untagged_by_src.get('直接流量', {'sessions':0,'revenue':0,'orders':0})
+            untagged_by_src['直接流量']['sessions'] += s
+            untagged_by_src['直接流量']['revenue']  += rv
+            untagged_by_src['直接流量']['orders']   += tx
+        else:
+            label = f'{r["dimensionValues"][0]["value"]}/{r["dimensionValues"][1]["value"]}'
+            untagged_by_src[label] = untagged_by_src.get(label, {'sessions':0,'revenue':0,'orders':0})
+            untagged_by_src[label]['sessions'] += s
+            untagged_by_src[label]['revenue']  += rv
+            untagged_by_src[label]['orders']   += tx
+
+    untagged_sess = total_sess - tagged_sess
+    utm_rate = round(tagged_sess / total_sess * 100, 1) if total_sess else 0
+    untagged_list = sorted(
+        [{'source': k, **v} for k, v in untagged_by_src.items()],
+        key=lambda x: x['sessions'], reverse=True
+    )[:10]
+
     return {
         'period':      {'start': start, 'end': end},
         'channels':    channels,
         'line_total':  line_total,
         'email_total': email_total,
+        'utm_coverage': {
+            'total_sessions':    total_sess,
+            'tagged_sessions':   tagged_sess,
+            'untagged_sessions': untagged_sess,
+            'utm_rate':          utm_rate,
+            'total_revenue':     total_rev,
+            'tagged_revenue':    tagged_rev,
+            'untagged_revenue':  total_rev - tagged_rev,
+        },
+        'untagged_sources': untagged_list,
     }
 
 
@@ -556,8 +636,7 @@ def fetch_mailchimp(days=30):
 
 def fetch_ga4_product_funnel(days=30):
     """商品層級轉化率：瀏覽 → 加購 → 購買"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
 
     def iv(row, i):
         try: return float(row['metricValues'][i]['value'])
@@ -598,10 +677,11 @@ def fetch_ga4_product_funnel(days=30):
 
 def fetch_ga4_yoy(days=30):
     """GA4 年同期比較（當期 vs 去年同期）"""
-    end       = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start     = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
-    yoy_end   = (datetime.today() - timedelta(days=366)).strftime('%Y-%m-%d')
-    yoy_start = (datetime.today() - timedelta(days=days + 365)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
+    start_dt = datetime.strptime(start, '%Y-%m-%d')
+    end_dt   = datetime.strptime(end,   '%Y-%m-%d')
+    yoy_start = (start_dt - timedelta(days=365)).strftime('%Y-%m-%d')
+    yoy_end   = (end_dt   - timedelta(days=365)).strftime('%Y-%m-%d')
 
     def v(row, i, typ=float):
         try: return typ(row['metricValues'][i]['value'])
@@ -727,8 +807,9 @@ def fetch_instagram_insights(days=30):
     info = raw_get(ig_id, {'fields': 'username,followers_count,media_count'})
 
     # ── 每日 reach（time_series，支援 since/until）
-    since = int((datetime.today() - timedelta(days=days)).timestamp())
-    until = int(datetime.today().timestamp())
+    start_ig, end_ig = _date_range(days)
+    since = int(datetime.strptime(start_ig, '%Y-%m-%d').timestamp())
+    until = int(datetime.strptime(end_ig,   '%Y-%m-%d').timestamp())
     reach_raw = raw_get(f'{ig_id}/insights', {
         'metric': 'reach',
         'period': 'day',
@@ -753,6 +834,27 @@ def fetch_instagram_insights(days=30):
     except Exception:
         totals = {}
 
+    # ── 熱門貼文 Top 12（按讚數排序）
+    top_posts = []
+    try:
+        media_raw = raw_get(f'{ig_id}/media', {
+            'fields': 'id,caption,timestamp,media_type,like_count,comments_count',
+            'since':  since, 'until': until,
+            'limit':  20,
+        })
+        for p in (media_raw.get('data') or []):
+            top_posts.append({
+                'id':        p.get('id', ''),
+                'caption':   (p.get('caption') or '')[:80],
+                'timestamp': (p.get('timestamp') or '')[:10],
+                'media_type': p.get('media_type', ''),
+                'likes':     p.get('like_count', 0),
+                'comments':  p.get('comments_count', 0),
+            })
+        top_posts.sort(key=lambda p: p['likes'] + p['comments'], reverse=True)
+    except Exception:
+        pass
+
     daily = [{'date': d, **v} for d, v in sorted(daily_map.items())]
     total_reach = sum(d.get('reach', 0) for d in daily)
 
@@ -768,7 +870,8 @@ def fetch_instagram_insights(days=30):
             'total_interactions': totals.get('total_interactions', 0),
             'accounts_engaged':   totals.get('accounts_engaged', 0),
         },
-        'daily': daily,
+        'daily':     daily,
+        'top_posts': top_posts[:12],
     }
 
 
@@ -778,8 +881,7 @@ def fetch_instagram_insights(days=30):
 
 def fetch_revenue_forecast(days=60):
     """GA4 每日營收線性回歸 + 14 天預測（blend 70% lin + 30% MA14）"""
-    end   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start, end = _date_range(days)
 
     raw = _ga4_report({
         'dateRanges': [{'startDate': start, 'endDate': end}],
@@ -840,8 +942,7 @@ def fetch_keyword_gaps(days=90):
     """GSC：近距離關鍵字（排名 11–30）+ CTR 差距分析"""
     from googleapiclient.discovery import build
     svc   = build('searchconsole', 'v1', credentials=_gsc_creds())
-    end   = (datetime.today() - timedelta(days=3)).strftime('%Y-%m-%d')
-    start = (datetime.today() - timedelta(days=days + 3)).strftime('%Y-%m-%d')
+    start, end = _date_range(days, lag=3)
 
     resp = svc.searchanalytics().query(
         siteUrl=GSC_SITE,
@@ -964,8 +1065,7 @@ def fetch_google_ads(days=30):
     """Google Ads 廣告活動成效（真實花費 / ROAS）"""
     from google.ads.googleads.errors import GoogleAdsException
 
-    end_str   = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
-    start_str = (datetime.today() - timedelta(days=days)).strftime('%Y-%m-%d')
+    start_str, end_str = _date_range(days)
 
     query = f"""
         SELECT
@@ -1043,6 +1143,85 @@ def fetch_google_ads(days=30):
     except GoogleAdsException as ex:
         errors = '; '.join(e.message for e in ex.failure.errors)
         raise RuntimeError(f'Google Ads API 錯誤：{errors}')
+
+
+def fetch_google_ads_keywords(days=30):
+    """Google Ads 關鍵字層級報告（花費、點擊、轉換、CPA）"""
+    from google.ads.googleads.errors import GoogleAdsException
+    start_str, end_str = _date_range(days)
+
+    query = f"""
+        SELECT
+            ad_group_criterion.keyword.text,
+            ad_group_criterion.keyword.match_type,
+            ad_group.name,
+            campaign.name,
+            metrics.impressions,
+            metrics.clicks,
+            metrics.cost_micros,
+            metrics.conversions,
+            metrics.conversions_value,
+            metrics.ctr,
+            metrics.average_cpc
+        FROM keyword_view
+        WHERE segments.date BETWEEN '{start_str}' AND '{end_str}'
+          AND metrics.impressions > 0
+          AND ad_group_criterion.status = 'ENABLED'
+        ORDER BY metrics.cost_micros DESC
+        LIMIT 50
+    """
+    try:
+        client     = _get_gads_client()
+        ga_service = client.get_service('GoogleAdsService')
+        client_ids = _gads_client_ids(client)
+
+        kw_map = {}
+        for cid in client_ids:
+            request = client.get_type('SearchGoogleAdsRequest')
+            request.customer_id = cid
+            request.query = query
+            try:
+                for row in ga_service.search(request=request):
+                    m    = row.metrics
+                    kw   = row.ad_group_criterion.keyword.text
+                    mt   = str(row.ad_group_criterion.keyword.match_type).split('.')[-1]
+                    spend = m.cost_micros / 1_000_000
+                    conv  = m.conversions
+                    key  = kw
+                    if key in kw_map:
+                        kw_map[key]['spend']   += round(spend)
+                        kw_map[key]['clicks']  += int(m.clicks)
+                        kw_map[key]['impressions'] += int(m.impressions)
+                        kw_map[key]['conversions'] += conv
+                        kw_map[key]['revenue'] += m.conversions_value
+                    else:
+                        kw_map[key] = {
+                            'keyword':      kw,
+                            'match_type':   mt,
+                            'campaign':     row.campaign.name,
+                            'ad_group':     row.ad_group.name,
+                            'spend':        round(spend),
+                            'clicks':       int(m.clicks),
+                            'impressions':  int(m.impressions),
+                            'conversions':  conv,
+                            'revenue':      m.conversions_value,
+                        }
+            except GoogleAdsException:
+                pass
+
+        keywords = sorted(kw_map.values(), key=lambda x: x['spend'], reverse=True)
+        for kw in keywords:
+            kw['ctr']  = round(kw['clicks'] / kw['impressions'] * 100, 2) if kw['impressions'] else 0
+            kw['cpa']  = round(kw['spend'] / kw['conversions'], 0) if kw['conversions'] else 0
+            kw['roas'] = round(kw['revenue'] / kw['spend'], 2) if kw['spend'] else 0
+
+        return {
+            'period':   {'start': start_str, 'end': end_str},
+            'keywords': keywords[:50],
+        }
+    except GoogleAdsException as ex:
+        errors = '; '.join(e.message for e in ex.failure.errors)
+        raise RuntimeError(f'Google Ads 關鍵字 API 錯誤：{errors}')
 
 
 # 保留舊名稱作為 server.py SECTION_MAP 的 alias

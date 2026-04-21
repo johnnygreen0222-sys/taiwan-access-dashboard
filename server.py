@@ -13,7 +13,7 @@ Taiwan Access 行銷儀表板 server（獨立版）
 import json, os, time
 import urllib.request
 from functools import wraps
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, g
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('ACCESS_TOKEN') or 'tw-dash-2026'
@@ -34,7 +34,7 @@ ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY') or CFG.get('anthropic_api_ke
 PORT          = int(CFG.get('port', 5200))
 
 # ── Per-section cache ─────────────────────────────────────
-_section_cache = {}   # {(section, days): {'data': ..., 'ts': float}}
+_section_cache = {}   # {(section, cache_key): {'data': ..., 'ts': float}}
 CACHE_TTL      = 1800  # 30 分鐘
 
 # ── Section → fetcher mapping ─────────────────────────────
@@ -50,8 +50,9 @@ SECTION_MAP = {
     'mailchimp':     ('fetch_mailchimp',            'days'),
     'product_funnel':('fetch_ga4_product_funnel',   'days'),
     'yoy':           ('fetch_ga4_yoy',              'days'),
-    'instagram':     ('fetch_instagram_insights',   'days'),
-    'threads':       ('fetch_threads_insights',     'days'),
+    'instagram':        ('fetch_instagram_insights',   'days'),
+    'threads':          ('fetch_threads_insights',     'days'),
+    'google_ads_kw':    ('fetch_google_ads_keywords',  'days'),
     'google_ads':    ('fetch_google_ads_via_ga4',   'days'),
     'forecast':      ('fetch_revenue_forecast',     'long60'),
     'keyword_gaps':  ('fetch_keyword_gaps',         'long90'),
@@ -106,14 +107,25 @@ def section_data(name):
         return jsonify({'error': f'未知 section：{name}'}), 404
 
     days               = int(request.args.get('days', 30))
+    start_date         = request.args.get('start')   # e.g. '2025-03-01'
+    end_date           = request.args.get('end')     # e.g. '2025-03-31'
     fn_name, mode      = SECTION_MAP[name]
 
     if   mode == 'long60': effective = max(60, days)
     elif mode == 'long90': effective = max(90, days)
     else:                  effective = days
 
-    cache_key = (name, effective)
-    now       = time.time()
+    # Inject custom date range into Flask request context
+    if start_date and end_date:
+        g.start_date = start_date
+        g.end_date   = end_date
+        cache_key = (name, start_date, end_date)
+    else:
+        g.start_date = None
+        g.end_date   = None
+        cache_key = (name, effective)
+
+    now = time.time()
     if cache_key in _section_cache and now - _section_cache[cache_key]['ts'] < CACHE_TTL:
         return jsonify(_section_cache[cache_key]['data'])
 
