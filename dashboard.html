@@ -705,14 +705,15 @@ function renderEDM({edm_utm:eu,mailchimp:mc},c){
   if(mc&&!mc.error&&mc.campaigns?.length){
     const card2=el('div','card'); card2.style.flex='1';
     card2.appendChild(cardTitle('🐵 Mailchimp 報告',''));
-    const avg=mc.avg||{};
+    const kpi=mc.kpi||{};
     const grid2=el('div','kpi-grid');
-    grid2.append(kpiCard('開信率',(avg.open_rate??0).toFixed(1)+'%',null,'Mailchimp'),
-                 kpiCard('點擊率',(avg.click_rate??0).toFixed(1)+'%',null,'Mailchimp'));
+    grid2.append(kpiCard('平均開信率',(kpi.avg_open_rate??0).toFixed(1)+'%',null,'Mailchimp'),
+                 kpiCard('平均點擊率',(kpi.avg_click_rate??0).toFixed(1)+'%',null,'Mailchimp'),
+                 kpiCard('總發送數',fmtN(kpi.total_sent),null,'Mailchimp'));
     card2.appendChild(grid2);
     const w=el('div','tbl-wrap');
-    w.appendChild(buildTable(['活動','開信率','點擊率','發送'],
-      mc.campaigns.slice(0,6).map(m=>[m.name,m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
+    w.appendChild(buildTable(['活動名稱','開信率','點擊率','發送數'],
+      mc.campaigns.slice(0,6).map(m=>[m.title||m.subject||'—',m.open_rate+'%',m.click_rate+'%',fmtN(m.emails_sent)])));
     card2.appendChild(w); row.appendChild(card2);
   }
   if(row.children.length){ section.appendChild(row); c.appendChild(section); }
