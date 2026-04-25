@@ -49,6 +49,7 @@ SECTION_TTL = {
     'gsc_pages':     2 * 3600,
     'instagram':     2 * 3600,
     'threads':       2 * 3600,
+    'youtube':       2 * 3600,
     'cc1':           2 * 3600,
     'google_ads_kw': 2 * 3600,    # 2 小時：關鍵字層級
 }
@@ -77,6 +78,7 @@ SECTION_MAP = {
     'threads':          ('fetch_threads_insights',     'days'),
     'google_ads_kw':    ('fetch_google_ads_keywords',  'days'),
     'google_ads':    ('fetch_google_ads_via_ga4',   'days'),
+    'youtube':       ('fetch_youtube',              'days'),
     'forecast':      ('fetch_revenue_forecast',     'long60'),
     'keyword_gaps':  ('fetch_keyword_gaps',         'long90'),
     'cc1':           ('fetch_cc1_progress',         'fixed'),

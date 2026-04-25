@@ -170,6 +170,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-fc"></div>
     <div id="sec-ig"></div>
     <div id="sec-threads"></div>
+    <div id="sec-yt"></div>
     <div id="sec-gads-kw"></div>
     <div id="sec-kwgap"></div>
     <div id="sec-alerts"></div>
@@ -346,6 +347,7 @@ const SECTIONS=[
   {id:'sec-fc',    deps:['forecast'],                         fn:renderForecast},
   {id:'sec-ig',      deps:['instagram'],                      fn:renderIG},
   {id:'sec-threads', deps:['threads'],                        fn:renderThreads},
+  {id:'sec-yt',      deps:['youtube'],                        fn:renderYouTube},
   {id:'sec-gads-kw', deps:['google_ads_kw'],                  fn:renderGAdsKW},
   {id:'sec-kwgap', deps:['keyword_gaps'],                     fn:renderKWGap},
   {id:'sec-alerts',deps:['ecommerce','meta','gsc'],           fn:renderAlerts},
@@ -394,7 +396,7 @@ function loadSections(days, start, end){
       // 依序更新 store，逐 section 渲染（讓快的先出現）
       const ordered=['ecommerce','meta','gsc','ga4_extras','meta_daily','gsc_pages',
                      'edm_utm','mailchimp','product_funnel','google_ads','yoy','cc1',
-                     'instagram','threads','google_ads_kw','forecast','keyword_gaps'];
+                     'instagram','threads','youtube','google_ads_kw','forecast','keyword_gaps'];
       const renderOne=i=>{
         if(i>=ordered.length){ checkRender(days); return; }
         const key=ordered[i];
@@ -1046,6 +1048,83 @@ function renderThreads({threads:th},c){
       ])
     ));
     card2.appendChild(w); row.appendChild(card2);
+  }
+
+  section.appendChild(row); c.appendChild(section);
+}
+
+function renderYouTube({youtube:yt},c){
+  if(!yt||yt.error){
+    if(yt?.error?.includes('YOUTUBE_API_KEY')) return; // 靜默跳過未設定
+    return;
+  }
+  const section=el('div','section'); const row=el('div','row');
+
+  // 左：KPI 卡
+  const card=el('div','card'); card.style.flex='1';
+  const ch=yt.channel||{};
+  card.appendChild(cardTitle('▶ YouTube 頻道成效', ch.name||''));
+  const grid=el('div','kpi-grid');
+  const kpi=yt.kpi||{};
+  const hasAnalytics=!yt.analytics_note||yt.analytics_note==='full';
+  grid.append(
+    kpiCard('訂閱人數', fmtN(ch.subscribers)),
+    kpiCard('影片總數', fmtN(ch.video_count)),
+  );
+  if(hasAnalytics){
+    grid.append(
+      kpiCard('觀看次數', fmtN(kpi.views)),
+      kpiCard('觀看時長', fmtN(kpi.watch_minutes)+'分'),
+      kpiCard('新增訂閱', fmtN(kpi.subscribers_gained)),
+      kpiCard('平均CTR',  (kpi.avg_ctr||0).toFixed(2)+'%'),
+    );
+  } else {
+    const note=el('div','attr-note'); note.style.marginTop='12px';
+    note.textContent='⚠ 未設定 YOUTUBE_REFRESH_TOKEN，觀看數據需 OAuth 授權才能顯示';
+    card.appendChild(grid); card.appendChild(note);
+    section.appendChild(card); c.appendChild(section); return;
+  }
+  card.appendChild(grid);
+
+  // 流量來源
+  if((yt.traffic_sources||[]).length){
+    const srcDiv=el('div',''); srcDiv.style.marginTop='14px';
+    srcDiv.appendChild(txt('div','src-label','流量來源'));
+    for(const s of yt.traffic_sources.slice(0,6)){
+      const r=el('div',''); r.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:.8rem';
+      r.appendChild(txt('span','',s.source));
+      const right=el('div',''); right.style.cssText='display:flex;gap:12px;color:var(--muted)';
+      right.appendChild(txt('span','',fmtN(s.views)+' 次'));
+      right.appendChild(txt('span','',s.pct+'%'));
+      r.appendChild(right); srcDiv.appendChild(r);
+    }
+    card.appendChild(srcDiv);
+  }
+  row.appendChild(card);
+
+  // 右：近期影片
+  if((yt.recent_videos||[]).length){
+    const card2=el('div','card'); card2.style.flex='1';
+    card2.appendChild(cardTitle('近期影片 Top 10','觀看數排序'));
+    const wrap=el('div','tbl-wrap');
+    const tbl=el('table','');
+    const thead=el('thead',''); const hr=el('tr','');
+    ['標題','觀看','讚','留言'].forEach(h=>{ const th=el('th',''); th.textContent=h; hr.appendChild(th); });
+    thead.appendChild(hr); tbl.appendChild(thead);
+    const tbody=el('tbody','');
+    for(const v of yt.recent_videos.slice(0,10)){
+      const tr=el('tr','');
+      const td0=el('td',''); td0.style.cssText='max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      const a=el('a',''); a.href='https://youtu.be/'+v.id; a.target='_blank'; a.style.color='var(--accent)';
+      a.textContent=v.title; td0.appendChild(a);
+      [td0, fmtN(v.views), fmtN(v.likes), fmtN(v.comments)].forEach((val,i)=>{
+        if(i===0){tr.appendChild(val);return;}
+        const td=el('td','tdr'); td.textContent=val; tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody); wrap.appendChild(tbl); card2.appendChild(wrap);
+    row.appendChild(card2);
   }
 
   section.appendChild(row); c.appendChild(section);

@@ -35,3 +35,9 @@ services:
         sync: false
       - key: GOOGLE_ADS_CUSTOMER_ID
         value: "7245588980"
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_CHANNEL_ID
+        value: "UCXmLcGhpnzwti10amVmcglA"
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false

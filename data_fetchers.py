@@ -1239,6 +1239,216 @@ fetch_google_ads_via_ga4 = fetch_google_ads
 
 
 # ══════════════════════════════════════════
+#  YouTube 頻道數據
+# ══════════════════════════════════════════
+
+YT_CHANNEL_ID = os.environ.get('YOUTUBE_CHANNEL_ID', 'UCXmLcGhpnzwti10amVmcglA')
+YT_DATA_BASE  = 'https://www.googleapis.com/youtube/v3'
+YT_AN_BASE    = 'https://youtubeanalytics.googleapis.com/v2'
+
+# 流量來源中文對照
+YT_SOURCE_NAMES = {
+    'YT_SEARCH':            'YouTube 搜尋',
+    'SUGGESTED_VIDEO':      '推薦影片',
+    'BROWSE_FEATURES':      '首頁 / 瀏覽',
+    'EXTERNAL':             '外部網站',
+    'PLAYLIST':             '播放清單',
+    'SUBSCRIBER':           '訂閱動態',
+    'NOTIFICATION':         '通知',
+    'SHORTS':               'Shorts 推薦',
+    'NO_LINK_EMBEDDED':     '嵌入播放',
+    'NO_LINK_OTHER':        '其他',
+    'END_SCREEN':           '結束畫面',
+    'CARD':                 '資訊卡',
+    'CAMPAIGN_CARD':        '廣告卡',
+    'YT_CHANNEL':           '頻道頁面',
+    'HASHTAGS':             'Hashtag',
+    'LIVE_REDIRECT':        '直播',
+}
+
+
+def _yt_refresh_access_token():
+    """用 refresh token 換取 access token（自動 refresh）"""
+    refresh = os.environ.get('YOUTUBE_REFRESH_TOKEN') or CFG.get('youtube_refresh_token', '')
+    client_id     = os.environ.get('GOOGLE_ADS_CLIENT_ID')     or CFG.get('client_id', '')
+    client_secret = os.environ.get('GOOGLE_ADS_CLIENT_SECRET') or CFG.get('client_secret', '')
+    if not refresh:
+        return None
+    data = urllib.parse.urlencode({
+        'grant_type':    'refresh_token',
+        'refresh_token': refresh,
+        'client_id':     client_id,
+        'client_secret': client_secret,
+    }).encode()
+    req = urllib.request.Request(
+        'https://oauth2.googleapis.com/token', data=data,
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read()).get('access_token')
+
+
+def fetch_youtube(days=30):
+    """YouTube 頻道成效：基本統計 + 近期影片 + Analytics（觀看時長 / 流量來源 / CTR）"""
+    api_key  = os.environ.get('YOUTUBE_API_KEY') or CFG.get('youtube_api_key', '')
+    ch_id    = os.environ.get('YOUTUBE_CHANNEL_ID', YT_CHANNEL_ID)
+    start, end = _date_range(days)
+
+    if not api_key:
+        raise ValueError('未設定 YOUTUBE_API_KEY，請至 Google Cloud Console 啟用 YouTube Data API v3 並建立 API 金鑰')
+
+    def yt_get(path, params):
+        p = dict(params); p['key'] = api_key
+        url = f'{YT_DATA_BASE}/{path}?{urllib.parse.urlencode(p)}'
+        with urllib.request.urlopen(url, timeout=15) as r:
+            data = json.loads(r.read())
+        if 'error' in data:
+            raise RuntimeError(data['error'].get('message', str(data['error'])))
+        return data
+
+    # ── 頻道基本資訊
+    ch_resp = yt_get('channels', {
+        'part': 'statistics,snippet',
+        'id':   ch_id,
+    })
+    ch_item = (ch_resp.get('items') or [{}])[0]
+    ch_stats = ch_item.get('statistics', {})
+    channel = {
+        'id':          ch_id,
+        'name':        ch_item.get('snippet', {}).get('title', ''),
+        'subscribers': int(ch_stats.get('subscriberCount', 0)),
+        'total_views': int(ch_stats.get('viewCount', 0)),
+        'video_count': int(ch_stats.get('videoCount', 0)),
+    }
+
+    # ── 近期影片（最近 20 支，用 search 取 ID）
+    search_resp = yt_get('search', {
+        'part':       'snippet',
+        'channelId':  ch_id,
+        'order':      'date',
+        'maxResults': 20,
+        'type':       'video',
+    })
+    video_ids = [i['id']['videoId'] for i in search_resp.get('items', []) if i.get('id', {}).get('videoId')]
+
+    recent_videos = []
+    if video_ids:
+        vid_resp = yt_get('videos', {
+            'part': 'statistics,snippet,contentDetails',
+            'id':   ','.join(video_ids),
+        })
+        for v in vid_resp.get('items', []):
+            vs = v.get('statistics', {})
+            recent_videos.append({
+                'id':        v['id'],
+                'title':     v['snippet']['title'],
+                'published': v['snippet']['publishedAt'][:10],
+                'views':     int(vs.get('viewCount', 0)),
+                'likes':     int(vs.get('likeCount', 0)),
+                'comments':  int(vs.get('commentCount', 0)),
+            })
+        recent_videos.sort(key=lambda v: v['views'], reverse=True)
+
+    result = {
+        'channel':       channel,
+        'recent_videos': recent_videos,
+        'period':        {'start': start, 'end': end},
+    }
+
+    # ── YouTube Analytics（需要 OAuth token）
+    access_token = _yt_refresh_access_token()
+    if not access_token:
+        result['analytics_note'] = 'no_token'
+        return result
+
+    def an_get(params):
+        p = dict(params); p['access_token'] = access_token
+        url = f'{YT_AN_BASE}/reports?{urllib.parse.urlencode(p)}'
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+        if 'error' in data:
+            raise RuntimeError(data['error'].get('message', str(data['error'])))
+        return data
+
+    def parse_rows(resp):
+        headers = [h['name'] for h in resp.get('columnHeaders', [])]
+        return [dict(zip(headers, row)) for row in resp.get('rows') or []]
+
+    # 每日趨勢
+    try:
+        daily_resp = an_get({
+            'ids':        f'channel=={ch_id}',
+            'startDate':  start,
+            'endDate':    end,
+            'metrics':    'views,estimatedMinutesWatched,subscribersGained,subscribersLost,impressions,impressionClickThroughRate',
+            'dimensions': 'day',
+            'sort':       'day',
+        })
+        daily = parse_rows(daily_resp)
+        n = len(daily) or 1
+        result['kpi'] = {
+            'views':              sum(int(d.get('views', 0)) for d in daily),
+            'watch_minutes':      round(sum(float(d.get('estimatedMinutesWatched', 0)) for d in daily)),
+            'subscribers_gained': sum(int(d.get('subscribersGained', 0)) for d in daily),
+            'subscribers_lost':   sum(int(d.get('subscribersLost', 0)) for d in daily),
+            'impressions':        sum(int(d.get('impressions', 0)) for d in daily),
+            'avg_ctr':            round(sum(float(d.get('impressionClickThroughRate', 0)) for d in daily) / n * 100, 2),
+        }
+        result['daily'] = [
+            {'date': d['day'], 'views': int(d.get('views', 0)),
+             'watch_minutes': round(float(d.get('estimatedMinutesWatched', 0)))}
+            for d in daily
+        ]
+    except Exception as e:
+        result['kpi_error'] = str(e)
+
+    # 流量來源
+    try:
+        src_resp = an_get({
+            'ids':       f'channel=={ch_id}',
+            'startDate': start,
+            'endDate':   end,
+            'metrics':   'views,estimatedMinutesWatched',
+            'dimensions':'insightTrafficSourceType',
+            'sort':      '-views',
+        })
+        total_src_views = sum(int(r.get('views', 0)) for r in parse_rows(src_resp)) or 1
+        result['traffic_sources'] = [
+            {
+                'source':        YT_SOURCE_NAMES.get(r.get('insightTrafficSourceType', ''), r.get('insightTrafficSourceType', '')),
+                'views':         int(r.get('views', 0)),
+                'watch_minutes': round(float(r.get('estimatedMinutesWatched', 0))),
+                'pct':           round(int(r.get('views', 0)) / total_src_views * 100, 1),
+            }
+            for r in parse_rows(src_resp)
+        ]
+    except Exception as e:
+        result['traffic_error'] = str(e)
+
+    # 裝置類型
+    try:
+        dev_resp = an_get({
+            'ids':       f'channel=={ch_id}',
+            'startDate': start,
+            'endDate':   end,
+            'metrics':   'views',
+            'dimensions':'deviceType',
+            'sort':      '-views',
+        })
+        dev_names = {'MOBILE':'手機','DESKTOP':'電腦','TABLET':'平板','TV':'電視','GAME_CONSOLE':'遊戲主機'}
+        result['devices'] = [
+            {'device': dev_names.get(r.get('deviceType',''), r.get('deviceType','')), 'views': int(r.get('views',0))}
+            for r in parse_rows(dev_resp)
+        ]
+    except Exception:
+        pass
+
+    result['analytics_note'] = 'full'
+    return result
+
+
+# ══════════════════════════════════════════
 #  Threads 社群互動數據
 # ══════════════════════════════════════════
 
