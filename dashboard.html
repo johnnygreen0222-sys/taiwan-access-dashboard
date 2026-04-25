@@ -173,6 +173,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-gads-kw"></div>
     <div id="sec-kwgap"></div>
     <div id="sec-alerts"></div>
+    <div id="sec-budget"></div>
     <div id="sec-ai"></div>
   </main>
 </div>
@@ -348,6 +349,7 @@ const SECTIONS=[
   {id:'sec-gads-kw', deps:['google_ads_kw'],                  fn:renderGAdsKW},
   {id:'sec-kwgap', deps:['keyword_gaps'],                     fn:renderKWGap},
   {id:'sec-alerts',deps:['ecommerce','meta','gsc'],           fn:renderAlerts},
+  {id:'sec-budget',deps:[],                                   fn:renderAdsBudget},
   {id:'sec-ai',    deps:[],                                   fn:renderAI},
 ];
 
@@ -1144,6 +1146,139 @@ function renderAlerts({ecommerce:ec,meta:mt,gsc},c){
   const section=el('div','section'); const card=el('div','card');
   card.appendChild(cardTitle('⚡ 自動分析與警示')); card.appendChild(wrap);
   section.appendChild(card); c.appendChild(section);
+}
+
+// ── Ads Budget ────────────────────────────────────────
+function renderAdsBudget({},c){
+  const section=el('div','section'); const card=el('div','card');
+  const titleRow=cardTitle('💳 廣告預算監控','今日預算使用率');
+  const refreshBtn=el('button','btn'); refreshBtn.style.cssText='font-size:.75rem;padding:4px 10px';
+  refreshBtn.textContent='↻ 重新整理';
+  titleRow.appendChild(refreshBtn);
+  card.appendChild(titleRow);
+  const body=el('div',''); body.id='budgetBody';
+  body.appendChild(txt('div','insights-placeholder','載入中…'));
+  card.appendChild(body); section.appendChild(card); c.appendChild(section);
+
+  async function load(){
+    refreshBtn.disabled=true;
+    refreshBtn.textContent='載入中…';
+    body.replaceChildren(txt('div','insights-placeholder','載入中…'));
+    try{
+      const r=await fetch('/api/ads/budget',{headers:{'X-Access-Token':getToken()}});
+      const d=await r.json();
+      renderBudgetData(d, body);
+    }catch(e){
+      body.replaceChildren(txt('div','insights-placeholder','載入失敗：'+e.message));
+    }
+    refreshBtn.disabled=false; refreshBtn.textContent='↻ 重新整理';
+  }
+  refreshBtn.onclick=load;
+  load();
+}
+
+function renderBudgetData(d, body){
+  body.replaceChildren();
+
+  // 警告橫幅
+  if(d.alert&&d.alert!=='ok'){
+    const banner=el('div','attr-note');
+    banner.style.cssText=d.alert==='danger'
+      ? 'color:#ef4444;background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.25);margin-bottom:14px'
+      : 'margin-bottom:14px';
+    banner.textContent=d.alert==='danger'
+      ? '⚠ 警告：有廣告活動預算即將用盡！'
+      : '⚡ 注意：部分廣告活動預算使用率偏高';
+    body.appendChild(banner);
+  }
+
+  const grid=el('div','row'); grid.style.gap='16px';
+
+  // Google Ads 卡
+  const gCard=el('div','card'); gCard.style.cssText='flex:1;min-width:260px;padding:16px';
+  const gHdr=el('div',''); gHdr.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:12px;font-weight:600;font-size:.85rem';
+  gHdr.appendChild(txt('span','','🔍 Google Ads'));
+  gCard.appendChild(gHdr);
+  const g=d.google||{};
+  if(!g.ok){
+    gCard.appendChild(txt('div','insights-placeholder',g.error||'未設定 Google Ads 憑證'));
+  } else {
+    const summary=el('div','kpi-grid'); summary.style.cssText='grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px';
+    const s1=el('div','kpi'); s1.style.padding='12px';
+    s1.appendChild(txt('div','kpi-label','今日花費'));
+    s1.appendChild(txt('div','kpi-val','NT$'+(g.total_spent_today||0).toLocaleString()));
+    const s2=el('div','kpi'); s2.style.padding='12px';
+    s2.appendChild(txt('div','kpi-label','活動數'));
+    s2.appendChild(txt('div','kpi-val',(g.campaigns||[]).length+''));
+    summary.append(s1,s2); gCard.appendChild(summary);
+    _renderBudgetCampaigns(g.campaigns||[], 'budget', gCard);
+  }
+  grid.appendChild(gCard);
+
+  // Meta Ads 卡
+  const mCard=el('div','card'); mCard.style.cssText='flex:1;min-width:260px;padding:16px';
+  const mHdr=el('div',''); mHdr.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:12px;font-weight:600;font-size:.85rem';
+  mHdr.appendChild(txt('span','','📘 Meta Ads'));
+  mCard.appendChild(mHdr);
+  const m=d.meta||{};
+  if(!m.ok){
+    mCard.appendChild(txt('div','insights-placeholder',m.error||'未設定 Meta Ads 憑證'));
+  } else {
+    const summary=el('div','kpi-grid'); summary.style.cssText='grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px';
+    const s1=el('div','kpi'); s1.style.padding='12px';
+    s1.appendChild(txt('div','kpi-label','今日花費'));
+    s1.appendChild(txt('div','kpi-val','NT$'+(m.today_spend||0).toLocaleString()));
+    const s2=el('div','kpi'); s2.style.padding='12px';
+    s2.appendChild(txt('div','kpi-label','累計花費'));
+    s2.appendChild(txt('div','kpi-val','NT$'+(m.total_spend||0).toLocaleString()));
+    summary.append(s1,s2); mCard.appendChild(summary);
+    if(m.spend_cap>0){
+      const capWrap=el('div',''); capWrap.style.marginBottom='12px';
+      const capLbl=el('div',''); capLbl.style.cssText='font-size:.72rem;color:var(--muted);margin-bottom:5px';
+      capLbl.textContent='帳戶上限：NT$'+(m.spend_cap||0).toLocaleString()+'（'+( m.spend_cap_pct||0)+'%）';
+      capWrap.appendChild(capLbl);
+      capWrap.appendChild(_budgetBar(m.spend_cap_pct, m.spend_cap_status));
+      mCard.appendChild(capWrap);
+    }
+    _renderBudgetCampaigns(m.campaigns||[], 'daily_budget', mCard);
+  }
+  grid.appendChild(mCard);
+  body.appendChild(grid);
+  const note=el('div',''); note.style.cssText='font-size:.7rem;color:var(--muted);margin-top:8px;text-align:right';
+  note.textContent='更新時間：'+( d.updated_at||'—');
+  body.appendChild(note);
+}
+
+function _budgetBar(pct, status){
+  const wrap=el('div','progress-wrap'); wrap.style.height='8px';
+  const fill=el('div','');
+  fill.style.cssText='height:100%;border-radius:4px;transition:width .4s;width:'+Math.min(pct||0,100)+'%;background:'+(
+    status==='danger'?'var(--red)':status==='warning'?'var(--yellow)':'var(--green)');
+  wrap.appendChild(fill); return wrap;
+}
+
+function _renderBudgetCampaigns(campaigns, budgetKey, container){
+  if(!campaigns.length){
+    container.appendChild(txt('div','',''));
+    return;
+  }
+  const lbl=el('div','src-label'); lbl.textContent='活動清單';
+  container.appendChild(lbl);
+  for(const c of campaigns){
+    const row=el('div',''); row.style.cssText='margin-bottom:10px';
+    const top=el('div',''); top.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px';
+    const name=el('span',''); name.style.cssText='font-size:.8rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    name.textContent=c.name||c.id||'—';
+    const badge=el('span','badge '+(c.status_level==='danger'?'badge-r':c.status_level==='warning'?'badge-y':'badge-g'));
+    badge.textContent=(c.pct||0)+'%';
+    top.append(name,badge); row.appendChild(top);
+    row.appendChild(_budgetBar(c.pct, c.status_level));
+    const meta=el('div',''); meta.style.cssText='display:flex;justify-content:space-between;font-size:.7rem;color:var(--muted);margin-top:3px';
+    meta.appendChild(txt('span','','已花：NT$'+(c.spent||0).toLocaleString()));
+    meta.appendChild(txt('span','','預算：NT$'+(c[budgetKey]||c.budget||0).toLocaleString()));
+    row.appendChild(meta);
+    container.appendChild(row);
+  }
 }
 
 function renderAI({},c){

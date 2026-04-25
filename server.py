@@ -266,6 +266,13 @@ def dashboard_refresh():
     return jsonify({'ok': True})
 
 
+@app.route('/api/ads/budget')
+@require_token
+def api_ads_budget():
+    from ads_budget import get_all
+    return jsonify(get_all())
+
+
 @app.route('/api/report/drive', methods=['POST'])
 @require_token
 def upload_report_drive():
