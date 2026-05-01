@@ -167,7 +167,6 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-gsc"></div>
     <div id="sec-edm"></div>
     <div id="sec-prods"></div>
-    <div id="sec-fc"></div>
     <div id="sec-ig"></div>
     <div id="sec-threads"></div>
     <div id="sec-yt"></div>
@@ -343,7 +342,6 @@ const SECTIONS=[
   {id:'sec-gsc',   deps:['gsc','gsc_pages'],                  fn:renderGSC},
   {id:'sec-edm',   deps:['edm_utm','mailchimp'],              fn:renderEDM},
   {id:'sec-prods', deps:['ecommerce','product_funnel'],       fn:renderProducts},
-  {id:'sec-fc',    deps:['forecast'],                         fn:renderForecast},
   {id:'sec-ig',      deps:['instagram'],                      fn:renderIG},
   {id:'sec-threads', deps:['threads'],                        fn:renderThreads},
   {id:'sec-yt',      deps:['youtube'],                        fn:renderYouTube},
@@ -394,7 +392,7 @@ function loadSections(days, start, end){
       // 依序更新 store，逐 section 渲染（讓快的先出現）
       const ordered=['ecommerce','meta','gsc','ga4_extras','meta_daily','gsc_pages',
                      'edm_utm','mailchimp','product_funnel','google_ads','yoy','cc1',
-                     'instagram','threads','youtube','google_ads_kw','forecast','keyword_gaps'];
+                     'instagram','threads','youtube','google_ads_kw','keyword_gaps'];
       const renderOne=i=>{
         if(i>=ordered.length){ checkRender(days); return; }
         const key=ordered[i];
