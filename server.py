@@ -35,9 +35,10 @@ ANTHROPIC_KEY = os.environ.get('ANTHROPIC_API_KEY') or CFG.get('anthropic_api_ke
 PORT          = int(CFG.get('port', 5200))
 
 # ── Per-section cache ─────────────────────────────────────
-_section_cache      = {}          # {cache_key: {'data': ..., 'ts': float}}
+_section_cache      = {}          # {cache_key: {'data': ..., 'ts': float, 'is_error': bool}}
 _cache_lock         = threading.Lock()
 DEFAULT_TTL         = 1800        # 30 分鐘（預設）
+ERROR_TTL           = 120         # 2 分鐘：失敗結果短暫快取，避免每次請求都重打 API
 
 # 不同資料的更新頻率不同，給更長 TTL 減少重複抓取
 SECTION_TTL = {
@@ -105,14 +106,14 @@ def _get_cached(cache_key, name):
         entry = _section_cache.get(cache_key)
     if not entry:
         return None
-    ttl = SECTION_TTL.get(name, DEFAULT_TTL)
+    ttl = ERROR_TTL if entry.get('is_error') else SECTION_TTL.get(name, DEFAULT_TTL)
     if time.time() - entry['ts'] < ttl:
         return entry['data']
     return None
 
-def _set_cached(cache_key, data):
+def _set_cached(cache_key, data, is_error=False):
     with _cache_lock:
-        _section_cache[cache_key] = {'data': data, 'ts': time.time()}
+        _section_cache[cache_key] = {'data': data, 'ts': time.time(), 'is_error': is_error}
 
 
 def _warm_cache_bg(days=30):
@@ -211,7 +212,9 @@ def section_data(name):
         _set_cached(cache_key, result)
         return jsonify(result)
     except Exception as e:
-        return jsonify({'error': str(e)})
+        err = {'error': str(e)}
+        _set_cached(cache_key, err, is_error=True)
+        return jsonify(err)
 
 
 @app.route('/api/sections/batch')
@@ -253,7 +256,9 @@ def sections_batch():
                     _set_cached(ck, data)
                     results[name] = data
                 except Exception as e:
-                    results[name] = {'error': str(e)}
+                    err = {'error': str(e)}
+                    _set_cached(ck, err, is_error=True)
+                    results[name] = err
 
     return jsonify(results)
 

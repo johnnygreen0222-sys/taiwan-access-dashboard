@@ -174,7 +174,6 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-gads-kw"></div>
     <div id="sec-kwgap"></div>
     <div id="sec-alerts"></div>
-    <div id="sec-budget"></div>
     <div id="sec-ai"></div>
   </main>
 </div>
@@ -351,7 +350,6 @@ const SECTIONS=[
   {id:'sec-gads-kw', deps:['google_ads_kw'],                  fn:renderGAdsKW},
   {id:'sec-kwgap', deps:['keyword_gaps'],                     fn:renderKWGap},
   {id:'sec-alerts',deps:['ecommerce','meta','gsc'],           fn:renderAlerts},
-  {id:'sec-budget',deps:[],                                   fn:renderAdsBudget},
   {id:'sec-ai',    deps:[],                                   fn:renderAI},
 ];
 
@@ -1227,7 +1225,7 @@ function renderAlerts({ecommerce:ec,meta:mt,gsc},c){
   section.appendChild(card); c.appendChild(section);
 }
 
-// ── Ads Budget ────────────────────────────────────────
+// ── Ads Budget (removed) ──────────────────────────────
 function renderAdsBudget({},c){
   const section=el('div','section'); const card=el('div','card');
   const titleRow=cardTitle('💳 廣告預算監控','今日預算使用率');
