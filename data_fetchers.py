@@ -1458,6 +1458,99 @@ def fetch_youtube(days=30):
 
 
 # ══════════════════════════════════════════
+#  Facebook 粉專貼文觸及
+# ══════════════════════════════════════════
+
+FB_PAGE_ID = os.environ.get('META_PAGE_ID', '127361397314472')
+
+def fetch_page_posts(days=30):
+    """粉專近期貼文互動（按讚、留言、分享）— 自動用 User Token 換取 Page Token"""
+    user_token = os.environ.get('META_ACCESS_TOKEN') or _load_config().get('meta_access_token', META_TOKEN)
+    if not user_token:
+        raise ValueError('未設定 META_ACCESS_TOKEN')
+
+    page_id = os.environ.get('META_PAGE_ID', FB_PAGE_ID)
+
+    # 換取 Page Access Token
+    def raw_get(path, params={}):
+        p = dict(params); p['access_token'] = user_token
+        url = f'https://graph.facebook.com/{GRAPH_VER}/{path}?{urllib.parse.urlencode(p)}'
+        with urllib.request.urlopen(url, timeout=20) as r:
+            data = json.loads(r.read())
+        if 'error' in data:
+            raise RuntimeError(data['error'].get('message', str(data['error'])))
+        return data
+
+    page_info = raw_get(page_id, {'fields': 'access_token,name,fan_count'})
+    page_token = page_info.get('access_token', '')
+    if not page_token:
+        raise ValueError('無法取得 Page Access Token，請確認帳號有粉專管理權限')
+
+    def page_get(path, params={}):
+        p = dict(params); p['access_token'] = page_token
+        url = f'https://graph.facebook.com/{GRAPH_VER}/{path}?{urllib.parse.urlencode(p)}'
+        with urllib.request.urlopen(url, timeout=20) as r:
+            data = json.loads(r.read())
+        if 'error' in data:
+            raise RuntimeError(data['error'].get('message', str(data['error'])))
+        return data
+
+    start, end = _date_range(days)
+    since_ts = int(datetime.strptime(start, '%Y-%m-%d').timestamp())
+    until_ts = int(datetime.strptime(end,   '%Y-%m-%d').timestamp())
+
+    # 抓近期貼文（最多 30 篇）
+    posts_raw = page_get(f'{page_id}/posts', {
+        'fields':  'id,message,created_time,full_picture,likes.summary(true),comments.summary(true),shares',
+        'since':   since_ts,
+        'until':   until_ts,
+        'limit':   30,
+    })
+
+    posts = []
+    tot_likes = tot_comments = tot_shares = 0
+    for p in (posts_raw.get('data') or []):
+        likes    = p.get('likes',    {}).get('summary', {}).get('total_count', 0)
+        comments = p.get('comments', {}).get('summary', {}).get('total_count', 0)
+        shares   = p.get('shares',   {}).get('count', 0)
+        eng      = likes + comments + shares
+        posts.append({
+            'id':         p.get('id', ''),
+            'message':    (p.get('message') or '')[:100],
+            'created':    (p.get('created_time') or '')[:10],
+            'picture':    p.get('full_picture', ''),
+            'likes':      likes,
+            'comments':   comments,
+            'shares':     shares,
+            'engagement': eng,
+        })
+        tot_likes    += likes
+        tot_comments += comments
+        tot_shares   += shares
+
+    posts.sort(key=lambda x: x['engagement'], reverse=True)
+    total_posts = len(posts)
+    total_eng   = tot_likes + tot_comments + tot_shares
+    avg_eng     = round(total_eng / total_posts) if total_posts else 0
+
+    return {
+        'page': {
+            'name':      page_info.get('name', ''),
+            'fans':      page_info.get('fan_count', 0),
+        },
+        'period': {'start': start, 'end': end},
+        'kpi': {
+            'total_posts':      total_posts,
+            'total_likes':      tot_likes,
+            'total_comments':   tot_comments,
+            'total_shares':     tot_shares,
+            'avg_engagement':   avg_eng,
+        },
+        'posts': posts[:15],
+    }
+
+
+# ══════════════════════════════════════════
 #  Threads 社群互動數據
 # ══════════════════════════════════════════
 

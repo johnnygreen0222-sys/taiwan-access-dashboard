@@ -168,6 +168,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <div id="sec-edm"></div>
     <div id="sec-prods"></div>
     <div id="sec-ig"></div>
+    <div id="sec-fb"></div>
     <div id="sec-threads"></div>
     <div id="sec-yt"></div>
     <div id="sec-gads-kw"></div>
@@ -343,6 +344,7 @@ const SECTIONS=[
   {id:'sec-edm',   deps:['edm_utm','mailchimp'],              fn:renderEDM},
   {id:'sec-prods', deps:['ecommerce','product_funnel'],       fn:renderProducts},
   {id:'sec-ig',      deps:['instagram'],                      fn:renderIG},
+  {id:'sec-fb',      deps:['page_posts'],                     fn:renderPagePosts},
   {id:'sec-threads', deps:['threads'],                        fn:renderThreads},
   {id:'sec-yt',      deps:['youtube'],                        fn:renderYouTube},
   {id:'sec-gads-kw', deps:['google_ads_kw'],                  fn:renderGAdsKW},
@@ -392,7 +394,7 @@ function loadSections(days, start, end){
       // 依序更新 store，逐 section 渲染（讓快的先出現）
       const ordered=['ecommerce','meta','gsc','ga4_extras','meta_daily','gsc_pages',
                      'edm_utm','mailchimp','product_funnel','google_ads','yoy','cc1',
-                     'instagram','threads','youtube','google_ads_kw','keyword_gaps'];
+                     'instagram','page_posts','threads','youtube','google_ads_kw','keyword_gaps'];
       const renderOne=i=>{
         if(i>=ordered.length){ checkRender(days); return; }
         const key=ordered[i];
@@ -999,6 +1001,51 @@ function renderIG({instagram:ig},c){
       options:{responsive:true,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:'#94a3b8',font:{size:11}}}},
         scales:{x:{ticks:{color:'#94a3b8',maxTicksLimit:14},grid:{color:'#2a2d3e'}},y:{ticks:{color:'#94a3b8'},grid:{color:'#2a2d3e'}}}}});
   });
+}
+
+function renderPagePosts({page_posts:fp},c){
+  if(!fp||fp.error) return;
+  const section=el('div','section'); const row=el('div','row');
+
+  // 左：KPI 卡
+  const card=el('div','card'); card.style.flex='1';
+  card.appendChild(cardTitle('📘 FB 粉專貼文',fp.page?.name||''));
+  const grid=el('div','kpi-grid');
+  [
+    {label:'粉絲數',     val:fmtN(fp.page?.fans||0)},
+    {label:'期間貼文',   val:fmtN(fp.kpi?.total_posts||0)},
+    {label:'總按讚',     val:fmtN(fp.kpi?.total_likes||0)},
+    {label:'總留言',     val:fmtN(fp.kpi?.total_comments||0)},
+    {label:'總分享',     val:fmtN(fp.kpi?.total_shares||0)},
+    {label:'平均互動',   val:fmtN(fp.kpi?.avg_engagement||0)},
+  ].forEach(({label,val})=>{
+    const cell=el('div','kpi');
+    cell.appendChild(txt('div','kpi-label',label));
+    cell.appendChild(txt('div','kpi-val',val));
+    grid.appendChild(cell);
+  });
+  card.appendChild(grid); row.appendChild(card);
+
+  // 右：熱門貼文
+  if(fp.posts?.length){
+    const card2=el('div','card'); card2.style.flex='2';
+    card2.appendChild(cardTitle('🔥 互動最高貼文',''));
+    const w=el('div','tbl-wrap');
+    w.appendChild(buildTable(
+      ['日期','貼文內容','讚','留言','分享','互動'],
+      fp.posts.slice(0,10).map(p=>[
+        p.created||'—',
+        (p.message||'（圖片貼文）').slice(0,45)+(p.message?.length>45?'…':''),
+        fmtN(p.likes||0),
+        fmtN(p.comments||0),
+        fmtN(p.shares||0),
+        fmtN(p.engagement||0),
+      ])
+    ));
+    card2.appendChild(w); row.appendChild(card2);
+  }
+
+  section.appendChild(row); c.appendChild(section);
 }
 
 function renderThreads({threads:th},c){

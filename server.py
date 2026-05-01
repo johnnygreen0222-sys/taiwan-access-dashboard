@@ -61,7 +61,7 @@ SECTION_TTL = {
 WARM_SECTIONS = [
     'ecommerce', 'meta', 'gsc', 'meta_daily', 'ga4_extras',
     'gsc_pages', 'edm_utm', 'mailchimp', 'product_funnel',
-    'google_ads', 'yoy', 'cc1', 'instagram', 'keyword_gaps',
+    'google_ads', 'yoy', 'cc1', 'instagram', 'page_posts', 'keyword_gaps',
 ]
 
 # ── Section → fetcher mapping ─────────────────────────────
@@ -78,6 +78,7 @@ SECTION_MAP = {
     'product_funnel':('fetch_ga4_product_funnel',   'days'),
     'yoy':           ('fetch_ga4_yoy',              'days'),
     'instagram':        ('fetch_instagram_insights',   'days'),
+    'page_posts':       ('fetch_page_posts',           'days'),
     'threads':          ('fetch_threads_insights',     'days'),
     'google_ads_kw':    ('fetch_google_ads_keywords',  'days'),
     'google_ads':    ('fetch_google_ads_via_ga4',   'days'),
