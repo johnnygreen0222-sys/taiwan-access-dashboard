@@ -1284,8 +1284,11 @@ def _yt_refresh_access_token():
         'https://oauth2.googleapis.com/token', data=data,
         headers={'Content-Type': 'application/x-www-form-urlencoded'},
     )
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.loads(r.read()).get('access_token')
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read()).get('access_token')
+    except Exception:
+        return None
 
 
 def fetch_youtube(days=30):
