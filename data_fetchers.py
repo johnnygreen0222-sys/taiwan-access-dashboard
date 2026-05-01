@@ -1298,10 +1298,19 @@ def fetch_youtube(days=30):
         raise ValueError('未設定 YOUTUBE_API_KEY，請至 Google Cloud Console 啟用 YouTube Data API v3 並建立 API 金鑰')
 
     def yt_get(path, params):
+        import urllib.error
         p = dict(params); p['key'] = api_key
         url = f'{YT_DATA_BASE}/{path}?{urllib.parse.urlencode(p)}'
-        with urllib.request.urlopen(url, timeout=15) as r:
-            data = json.loads(r.read())
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                data = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8', errors='ignore')
+            try:
+                msg = json.loads(body)['error']['message']
+            except Exception:
+                msg = body[:200]
+            raise RuntimeError(f'YouTube {path} HTTP{e.code}: {msg}')
         if 'error' in data:
             raise RuntimeError(data['error'].get('message', str(data['error'])))
         return data
