@@ -405,8 +405,8 @@ function loadSections(days, start, end){
         Promise.resolve().then(()=>renderOne(i+1));
       };
       renderOne(0);
-      // 補上 batch 可能沒有的 key（安全網）
-      keys.forEach(k=>{ if(!(k in _store)) _store[k]={error:'未回傳'}; });
+      // 補上 batch response 中根本沒有的 key（安全網）
+      keys.forEach(k=>{ if(!(k in data)) _store[k]={error:'未回傳'}; });
       checkRender(days);
     })
     .catch(e=>{
