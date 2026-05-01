@@ -1315,9 +1315,9 @@ def fetch_youtube(days=30):
             raise RuntimeError(data['error'].get('message', str(data['error'])))
         return data
 
-    # ── 頻道基本資訊
+    # ── 頻道基本資訊 + 上傳播放清單 ID
     ch_resp = yt_get('channels', {
-        'part': 'statistics,snippet',
+        'part': 'statistics,snippet,contentDetails',
         'id':   ch_id,
     })
     ch_item = (ch_resp.get('items') or [{}])[0]
@@ -1330,15 +1330,20 @@ def fetch_youtube(days=30):
         'video_count': int(ch_stats.get('videoCount', 0)),
     }
 
-    # ── 近期影片（最近 20 支，用 search 取 ID）
-    search_resp = yt_get('search', {
-        'part':       'snippet',
-        'channelId':  ch_id,
-        'order':      'date',
-        'maxResults': 20,
-        'type':       'video',
-    })
-    video_ids = [i['id']['videoId'] for i in search_resp.get('items', []) if i.get('id', {}).get('videoId')]
+    # ── 近期影片（用 uploads playlist 取代 search，省 quota 且不受 search 限制）
+    uploads_id = ch_item.get('contentDetails', {}).get('relatedPlaylists', {}).get('uploads', '')
+    video_ids = []
+    if uploads_id:
+        pl_resp = yt_get('playlistItems', {
+            'part':       'snippet',
+            'playlistId': uploads_id,
+            'maxResults': 20,
+        })
+        video_ids = [
+            i['snippet']['resourceId']['videoId']
+            for i in pl_resp.get('items', [])
+            if i.get('snippet', {}).get('resourceId', {}).get('videoId')
+        ]
 
     recent_videos = []
     if video_ids:
