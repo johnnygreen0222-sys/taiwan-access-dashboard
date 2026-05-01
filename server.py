@@ -181,6 +181,24 @@ def ping():
     return 'ok', 200
 
 
+@app.route('/api/debug/youtube')
+@require_token
+def debug_youtube():
+    """臨時診斷：直接測試 YouTube API 並回傳原始錯誤"""
+    import urllib.request, urllib.parse, urllib.error, json as _json
+    api_key = os.environ.get('YOUTUBE_API_KEY', '')
+    ch_id   = os.environ.get('YOUTUBE_CHANNEL_ID', 'UCXmLcGhpnzwti10amVmcglA')
+    url = f'https://www.googleapis.com/youtube/v3/channels?part=statistics&id={ch_id}&key={api_key}'
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return jsonify({'status': 200, 'body': _json.loads(r.read())})
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='ignore')
+        return jsonify({'status': e.code, 'error_type': 'HTTPError', 'body': body[:500]})
+    except Exception as e:
+        return jsonify({'status': 0, 'error_type': type(e).__name__, 'msg': str(e)[:300]})
+
+
 @app.route('/api/auth', methods=['POST'])
 def auth():
     data  = request.get_json(silent=True) or {}
