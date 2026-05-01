@@ -15,8 +15,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from flask import Flask, request, jsonify, send_from_directory, session, g
+from flask_compress import Compress
 
 app = Flask(__name__)
+Compress(app)
 app.secret_key = os.environ.get('SECRET_KEY') or os.environ.get('ACCESS_TOKEN') or 'tw-dash-2026'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -59,7 +61,7 @@ SECTION_TTL = {
 WARM_SECTIONS = [
     'ecommerce', 'meta', 'gsc', 'meta_daily', 'ga4_extras',
     'gsc_pages', 'edm_utm', 'mailchimp', 'product_funnel',
-    'google_ads', 'yoy', 'cc1',
+    'google_ads', 'yoy', 'cc1', 'instagram', 'forecast', 'keyword_gaps',
 ]
 
 # ── Section → fetcher mapping ─────────────────────────────
@@ -171,6 +173,11 @@ def index():
 @app.route('/api/status')
 def status():
     return jsonify({'token_required': bool(ACCESS_TOKEN)})
+
+
+@app.route('/ping')
+def ping():
+    return 'ok', 200
 
 
 @app.route('/api/auth', methods=['POST'])
