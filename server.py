@@ -61,7 +61,7 @@ SECTION_TTL = {
 WARM_SECTIONS = [
     'ecommerce', 'meta', 'gsc', 'meta_daily', 'ga4_extras',
     'gsc_pages', 'edm_utm', 'mailchimp', 'product_funnel',
-    'google_ads', 'yoy', 'cc1', 'instagram', 'page_posts', 'keyword_gaps',
+    'google_ads', 'yoy', 'cc1', 'instagram', 'page_posts', 'threads', 'keyword_gaps',
 ]
 
 # ── Section → fetcher mapping ─────────────────────────────
